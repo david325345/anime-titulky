@@ -3,10 +3,12 @@
 // Každý parser: async (sub) => { buf, filename }  (nebo hodí chybu / vrátí null).
 import * as wosir from './wosir.js';
 import * as hns from './hns.js';
+import * as hannyasubs from './hannyasubs.js';
 
 const SOURCES = {
   'wosir.cz': wosir,
   'hns.sk': hns,
+  'hannya-subs.blogspot.com': hannyasubs,
   // 'dalsi-web.cz': dalsiModul,
 };
 
