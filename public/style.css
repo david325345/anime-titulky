@@ -54,8 +54,13 @@ main { padding: 22px; max-width: 1200px; margin: 0 auto; }
 .panel h2 { margin: 0 0 14px; font-size: 15px; color: var(--text); }
 .table-wrap { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; }
-th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
-th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .4px; }
+th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .4px; white-space: nowrap; }
+/* dlouhé sloupce se zalamují, krátké zůstanou na řádku */
+td.nowrap, th.nowrap { white-space: nowrap; }
+td.anime { max-width: 320px; word-break: break-word; }
+td.release { max-width: 200px; word-break: break-word; color: var(--muted); }
+td.group { max-width: 160px; word-break: break-word; }
 td a { color: var(--accent); text-decoration: none; }
 td a:hover { text-decoration: underline; }
 tbody tr:hover { background: #1f2833; }
