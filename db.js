@@ -156,7 +156,8 @@ export const overviewCounts = () =>
         COUNT(*) AS total,
         SUM(status='downloaded')     AS downloaded,
         SUM(status='pending_extern') AS extern_pending,
-        SUM(status='failed')         AS failed
+        SUM(status='failed')         AS failed,
+        SUM(r2_key IS NOT NULL AND r2_key<>'') AS on_r2
        FROM subs`
     )
     .get();
