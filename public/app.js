@@ -34,9 +34,10 @@ function renderStats(c, status) {
 
 function renderSubs(subs) {
   $('#subsTable tbody').innerHTML = subs.map((s) => {
+    const cleanTitle = (s.anime_title || '#' + s.hiyori_id).replace(/\s*[-–]\s*Hiyori\s*$/i, '');
     const anime = s.hiyori_id
-      ? `<a href="https://hiyori.cz/anime/${s.hiyori_id}" target="_blank">${esc(s.anime_title || '#' + s.hiyori_id)}</a>`
-      : esc(s.anime_title || '');
+      ? `<a href="https://hiyori.cz/anime/${s.hiyori_id}" target="_blank" title="${esc(cleanTitle)}">${esc(cleanTitle)}</a>`
+      : esc(cleanTitle);
     const lang = s.lang ? `<span class="pill lang-${esc(s.lang)}">${esc(s.lang)}</span>` : '';
     const src = s.kind === 'direct'
       ? `<span class="pill src-direct">hiyori</span>`
@@ -45,15 +46,15 @@ function renderSubs(subs) {
       ? `<a href="/api/file/${s.sub_id}">stáhnout</a>`
       : (s.kind === 'extern' ? `<a href="${esc(s.url)}" target="_blank">otevřít</a>` : '');
     return `<tr>
-      <td class="muted">${fmtDate(s.first_seen)}</td>
-      <td>${anime}</td>
-      <td>${s.episode ?? '—'}</td>
-      <td>${lang}</td>
-      <td>${esc(s.group_name || '')}</td>
-      <td class="muted">${esc(s.release || '')}</td>
-      <td>${src}</td>
-      <td>${statusCell(s)}</td>
-      <td>${dl}</td>
+      <td class="muted nowrap">${fmtDate(s.first_seen)}</td>
+      <td class="anime">${anime}</td>
+      <td class="nowrap">${s.episode ?? '—'}</td>
+      <td class="nowrap">${lang}</td>
+      <td class="group">${esc(s.group_name || '')}</td>
+      <td class="release">${esc(s.release || '')}</td>
+      <td class="nowrap">${src}</td>
+      <td class="nowrap">${statusCell(s)}</td>
+      <td class="nowrap">${dl}</td>
     </tr>`;
   }).join('') || `<tr><td colspan="9" class="muted">Zatím nic. Spusť scrape.</td></tr>`;
 }
