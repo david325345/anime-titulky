@@ -37,6 +37,9 @@ export const CONFIG = {
   // strop na počet STAŽENÝCH titulků za jeden běh (zbytek počká na příště)
   maxDownloadsPerRun: Number(process.env.MAX_DOWNLOADS_PER_RUN || 5),
 
+  // min. rozestup (ms) mezi requesty na TÝŽ web (per-doména brzda proti banu)
+  perHostDelayMs: Number(process.env.PER_HOST_DELAY_MS || 4000),
+
   // pauza mezi requesty (ms) — základ; skutečná pauza je náhodná v rozsahu min–max
   requestDelayMs: Number(process.env.REQUEST_DELAY_MS || 2000),
   delayMinMs: Number(process.env.DELAY_MIN_MS || 0), // 0 = odvodit z requestDelayMs
