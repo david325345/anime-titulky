@@ -26,14 +26,10 @@ function sanitize(name) {
     .slice(0, 180);
 }
 
-// stáhne přímý titulek a uloží na disk. Vrací {filename, local_path, file_bytes}.
-export async function downloadDirect(sub) {
-  const { buf, contentDisposition } = await getBinary(sub.url, {
-    referer: `https://hiyori.cz/anime/${sub.hiyori_id}`,
-  });
-
-  const rawName = filenameFromCD(contentDisposition, `sub-${sub.sub_id}.ass`);
-  const filename = sanitize(rawName);
+// Sdílené uložení titulku na disk (používá direct i externí parsery).
+// Vrací {filename, local_path, file_bytes}.
+export function saveSubFile(sub, buf, rawName) {
+  const filename = sanitize(rawName || `sub-${sub.sub_id}.ass`);
 
   // struktura: {DATA_DIR}/files/{anilist_id|hiyori_id}/E{episode}/{filename}
   const animeDir = String(sub.anilist_id || `hiyori-${sub.hiyori_id}`);
@@ -41,10 +37,19 @@ export async function downloadDirect(sub) {
   const dir = path.join(CONFIG.dataDir, 'files', animeDir, epDir);
   fs.mkdirSync(dir, { recursive: true });
 
-  // ať se nepřepisují různé skupiny se stejným názvem
+  // prefix sub_id, ať se různé skupiny se stejným názvem nepřepíšou
   const outName = `${sub.sub_id}__${filename}`;
   const local_path = path.join(dir, outName);
   fs.writeFileSync(local_path, buf);
 
   return { filename: outName, local_path, file_bytes: buf.length };
+}
+
+// stáhne přímý titulek z hiyori a uloží. Vrací {filename, local_path, file_bytes}.
+export async function downloadDirect(sub) {
+  const { buf, contentDisposition } = await getBinary(sub.url, {
+    referer: `https://hiyori.cz/anime/${sub.hiyori_id}`,
+  });
+  const rawName = filenameFromCD(contentDisposition, `sub-${sub.sub_id}.ass`);
+  return saveSubFile(sub, buf, rawName);
 }
