@@ -49,3 +49,16 @@ export async function r2Put(key, body, contentType = 'application/octet-stream')
   }
   return key;
 }
+
+// stáhne objekt z R2 → Buffer (nebo null, když R2 není / objekt chybí).
+export async function r2Get(key) {
+  const c = getClient();
+  if (!c) return null;
+  const res = await c.fetch(endpoint(key), { method: 'GET' });
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    const t = await res.text().catch(() => '');
+    throw new Error(`R2 GET ${res.status}: ${t.slice(0, 200)}`);
+  }
+  return Buffer.from(await res.arrayBuffer());
+}

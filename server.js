@@ -8,7 +8,8 @@ import { runOnce, isRunning } from './scraper/run.js';
 import {
   overviewCounts, recentSubs, recentRuns, getMeta, getSub, findSubs, subsAvailability,
 } from './db.js';
-import { r2PublicUrl } from './r2.js';
+import { r2PublicUrl, r2Get } from './r2.js';
+import zlib from 'node:zlib';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -113,13 +114,34 @@ app.post('/api/run', (req, res) => {
   res.json({ started: true });
 });
 
-// stažení konkrétního titulku z UI
-app.get('/api/file/:subId', (req, res) => {
+// stažení konkrétního titulku z UI — rozbalený .ass (z R2 .gz, fallback lokální)
+app.get('/api/file/:subId', async (req, res) => {
   const sub = getSub(Number(req.params.subId));
-  if (!sub || !sub.local_path || !fs.existsSync(sub.local_path)) {
-    return res.status(404).send('Soubor není k dispozici.');
+  if (!sub) return res.status(404).send('Titulek nenalezen.');
+
+  const outName = (sub.filename || `sub-${sub.sub_id}.ass`).replace(/\.gz$/i, '');
+
+  // 1) primárně z R2 (.gz) → rozbalit → poslat .ass
+  if (sub.r2_key) {
+    try {
+      const gz = await r2Get(sub.r2_key);
+      if (gz) {
+        const ass = zlib.gunzipSync(gz);
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(outName)}"`);
+        return res.send(ass);
+      }
+    } catch (e) {
+      console.error('R2 file fetch:', e.message);
+    }
   }
-  res.download(sub.local_path, sub.filename || `sub-${sub.sub_id}`);
+
+  // 2) fallback: lokální syrová kopie (když R2 není / selhalo)
+  if (sub.local_path && fs.existsSync(sub.local_path)) {
+    return res.download(sub.local_path, outName);
+  }
+
+  return res.status(404).send('Soubor není k dispozici.');
 });
 
 app.listen(CONFIG.port, () => {
