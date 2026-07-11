@@ -4,7 +4,7 @@ import { getFeed } from './feed.js';
 import { getDetail } from './detail.js';
 import { downloadDirect } from './download.js';
 import { downloadExtern, hasSourceFor } from './sources/index.js';
-import { sleep } from './http.js';
+import { sleep, throttle, RateLimited } from './http.js';
 import {
   getMeta, setMeta, upsertAnime, insertSub, getSub,
   markDownloaded, markFailed, startRun, finishRun,
@@ -52,6 +52,7 @@ export async function runOnce({ log = console.log } = {}) {
 
     // 4) detaily
     const toDownload = [];
+    let consecErrors = 0;
     for (const hiyoriId of ids) {
       stats.anime_checked++;
       const card = byId.get(hiyoriId);
@@ -98,10 +99,21 @@ export async function runOnce({ log = console.log } = {}) {
             else toDownload.push(row.sub_id); // extern s hotovým parserem
           }
         }
+        consecErrors = 0; // úspěch → vynulovat řadu chyb
       } catch (e) {
-        log(`  ⚠ detail ${hiyoriId}: ${e.message}`);
+        if (e instanceof RateLimited) {
+          log('  ⛔ ' + e.message + ' — utínám běh, ať nedostaneme ban.');
+          throw e; // rate-limit = okamžitě ukončit celý běh
+        }
+        consecErrors++;
+        log(`  ⚠ detail ${hiyoriId}: ${e.message} (chyb v řadě: ${consecErrors})`);
+        if (consecErrors >= CONFIG.maxConsecutiveErrors) {
+          throw new Error(
+            `${consecErrors} chyb v řadě — utínám běh (server možná brzdí / je dole).`
+          );
+        }
       }
-      await sleep(CONFIG.requestDelayMs);
+      await throttle();
     }
 
     // 5) stahování nových titulků (zatím vypnuto → jen evidujeme)
@@ -129,11 +141,15 @@ export async function runOnce({ log = console.log } = {}) {
         });
         stats.downloaded++;
       } catch (e) {
+        if (e instanceof RateLimited) {
+          log('  ⛔ ' + e.message + ' — utínám stahování.');
+          throw e;
+        }
         markFailed(subId, e.message);
         stats.failed++;
         log(`  ✗ stažení sub ${subId}: ${e.message}`);
       }
-      await sleep(CONFIG.requestDelayMs);
+      await throttle();
     }
 
     setMeta('last_run_iso', new Date().toISOString());
