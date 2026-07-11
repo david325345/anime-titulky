@@ -76,16 +76,20 @@ app.get('/api/subs', (req, res) => {
 app.get('/api/subs/available', (req, res) => {
   const anilist = Number(req.query.anilist) || null;
   const mal = Number(req.query.mal) || null;
+  const episode = req.query.episode != null && req.query.episode !== ''
+    ? Number(req.query.episode)
+    : null;
   if (!anilist && !mal) {
     return res.status(400).json({ error: 'Zadej anilist a/nebo mal.' });
   }
-  const a = subsAvailability({ anilist, mal });
+  const a = subsAvailability({ anilist, mal, episode });
   res.json({
     available: a.total > 0,
     matched_by: a.matchedBy,
+    episode, // který díl se ptal (null = celé anime)
     total: a.total,
     langs: a.langs, // ['CZ','SK']
-    episodes: a.episodes, // [1,2,3,4]
+    episodes: a.episodes, // [1,2,3,4] (u dotazu na díl jen ten díl)
   });
 });
 

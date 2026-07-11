@@ -209,16 +209,17 @@ export function findSubs({ anilist = null, mal = null, episode = null, lang = nu
   return { matchedBy: null, rows: [] };
 }
 
-// availability: souhrn, zda pro anilist/mal máme titulky na R2 (bez plných dat).
+// availability: souhrn, zda pro anilist/mal (a volitelně episode) máme titulky na R2.
 // Vrací {matchedBy, total, langs, episodes} — nebo total 0.
-export function subsAvailability({ anilist = null, mal = null }) {
+export function subsAvailability({ anilist = null, mal = null, episode = null }) {
+  const epCond = episode != null ? ' AND episode=@episode' : '';
   const base =
     "FROM subs WHERE status='downloaded' AND r2_key IS NOT NULL AND r2_key<>''";
 
   const summarize = (idCol, id) => {
     const rows = db
-      .prepare(`SELECT episode, lang ${base} AND ${idCol}=?`)
-      .all(id);
+      .prepare(`SELECT episode, lang ${base} AND ${idCol}=@id${epCond}`)
+      .all({ id, episode });
     if (!rows.length) return null;
     const langs = [...new Set(rows.map((r) => r.lang).filter(Boolean))].sort();
     const episodes = [
