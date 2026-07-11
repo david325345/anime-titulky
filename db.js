@@ -171,7 +171,7 @@ export const getDownloadCandidates = (limit = 30) =>
   db
     .prepare(
       `SELECT * FROM subs
-       WHERE status IN ('new','pending_extern')
+       WHERE status IN ('new','not_downloaded','pending_extern')
        ORDER BY first_seen ASC, sub_id ASC LIMIT ?`
     )
     .all(limit);
