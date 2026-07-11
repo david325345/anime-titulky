@@ -183,3 +183,28 @@ export const pendingExternByDomain = () =>
       "SELECT extern_domain, COUNT(*) AS c FROM subs WHERE status='pending_extern' GROUP BY extern_domain"
     )
     .all();
+
+// lookup pro addon: stažené titulky (na R2) podle anilist NEBO mal + episode.
+// Přednost má anilist; když nic, zkusí mal. Vrací {matchedBy, rows}.
+export function findSubs({ anilist = null, mal = null, episode = null, lang = null }) {
+  const langCond = lang ? ' AND UPPER(lang)=UPPER(@lang)' : '';
+  const epCond = episode != null ? ' AND episode=@episode' : '';
+  const base =
+    "SELECT sub_id, anilist_id, mal_id, anime_title, episode, lang, group_name, " +
+    "release, version, kind, extern_domain, filename, file_bytes, r2_key " +
+    "FROM subs WHERE status='downloaded' AND r2_key IS NOT NULL AND r2_key<>''";
+
+  if (anilist) {
+    const rows = db
+      .prepare(`${base} AND anilist_id=@anilist${epCond}${langCond} ORDER BY lang, group_name`)
+      .all({ anilist, episode, lang });
+    if (rows.length) return { matchedBy: 'anilist', rows };
+  }
+  if (mal) {
+    const rows = db
+      .prepare(`${base} AND mal_id=@mal${epCond}${langCond} ORDER BY lang, group_name`)
+      .all({ mal, episode, lang });
+    if (rows.length) return { matchedBy: 'mal', rows };
+  }
+  return { matchedBy: null, rows: [] };
+}

@@ -6,8 +6,9 @@ import { fileURLToPath } from 'node:url';
 import { CONFIG } from './config.js';
 import { runOnce, isRunning } from './scraper/run.js';
 import {
-  overviewCounts, recentSubs, recentRuns, getMeta, getSub,
+  overviewCounts, recentSubs, recentRuns, getMeta, getSub, findSubs,
 } from './db.js';
+import { r2PublicUrl } from './r2.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -33,6 +34,40 @@ app.post('/api/run', (req, res) => {
   if (isRunning()) return res.json({ started: false, reason: 'už běží' });
   runOnce().catch((e) => console.error('run error', e));
   res.json({ started: true });
+});
+
+// === LOOKUP endpoint pro addon ===
+// GET /api/subs?anilist=154587&mal=52991&episode=5[&lang=CZ]
+// Vrací stažené titulky (na R2) — přednost anilist, fallback mal.
+app.get('/api/subs', (req, res) => {
+  const anilist = Number(req.query.anilist) || null;
+  const mal = Number(req.query.mal) || null;
+  const episode = req.query.episode != null && req.query.episode !== ''
+    ? Number(req.query.episode)
+    : null;
+  const lang = req.query.lang ? String(req.query.lang) : null;
+
+  if (!anilist && !mal) {
+    return res.status(400).json({ error: 'Zadej anilist a/nebo mal.' });
+  }
+
+  const { matchedBy, rows } = findSubs({ anilist, mal, episode, lang });
+  const subs = rows.map((r) => ({
+    sub_id: r.sub_id,
+    lang: r.lang,
+    group: r.group_name,
+    release: r.release,
+    version: r.version,
+    episode: r.episode,
+    kind: r.kind,
+    source: r.extern_domain || 'hiyori',
+    filename: r.filename ? r.filename.replace(/\.gz$/i, '') : null,
+    file_bytes: r.file_bytes,
+    r2_key: r.r2_key,
+    gz_url: r2PublicUrl(r.r2_key), // veřejný odkaz na .gz (addon si rozbalí)
+  }));
+
+  res.json({ matched_by: matchedBy, count: subs.length, subs });
 });
 
 // stažení konkrétního titulku z UI
