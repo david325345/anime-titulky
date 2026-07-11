@@ -24,6 +24,7 @@ function renderStats(c, status) {
   $('#stats').innerHTML = `
     <div class="card"><div class="k">Titulků celkem</div><div class="v">${c.total || 0}</div></div>
     <div class="card"><div class="k">Staženo</div><div class="v">${c.downloaded || 0}</div></div>
+    <div class="card"><div class="k">Na R2</div><div class="v">${c.on_r2 || 0}</div></div>
     <div class="card"><div class="k">Externí (čeká)</div><div class="v">${c.extern_pending || 0}</div></div>
     <div class="card"><div class="k">Chyby</div><div class="v">${c.failed || 0}</div></div>`;
   $('#lastRun').innerHTML =
@@ -45,6 +46,9 @@ function renderSubs(subs) {
     const dl = s.status === 'downloaded'
       ? `<a href="/api/file/${s.sub_id}">stáhnout</a>`
       : (s.kind === 'extern' ? `<a href="${esc(s.url)}" target="_blank">otevřít</a>` : '');
+    const onR2 = s.r2_key
+      ? `<span class="pill r2-yes" title="${esc(s.r2_key)}">✓</span>`
+      : `<span class="r2-no">—</span>`;
     return `<tr>
       <td class="muted nowrap">${fmtDate(s.first_seen)}</td>
       <td class="anime">${anime}</td>
@@ -54,9 +58,10 @@ function renderSubs(subs) {
       <td class="release">${esc(s.release || '')}</td>
       <td class="nowrap">${src}</td>
       <td class="nowrap">${statusCell(s)}</td>
+      <td class="nowrap">${onR2}</td>
       <td class="nowrap">${dl}</td>
     </tr>`;
-  }).join('') || `<tr><td colspan="9" class="muted">Zatím nic. Spusť scrape.</td></tr>`;
+  }).join('') || `<tr><td colspan="10" class="muted">Zatím nic. Spusť scrape.</td></tr>`;
 }
 
 function renderRuns(runs) {
