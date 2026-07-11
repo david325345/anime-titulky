@@ -61,6 +61,13 @@ export const CONFIG = {
     prefix: process.env.R2_PREFIX || 'subs',
     publicBase: (process.env.R2_PUBLIC_BASE || '').replace(/\/+$/, ''), // volitelné veřejné URL
   },
+
+  // Basic Auth na dashboard + admin (addon endpointy zůstávají veřejné).
+  // Když AUTH_USER/AUTH_PASS chybí, dashboard není chráněný.
+  auth: {
+    user: process.env.AUTH_USER || '',
+    pass: process.env.AUTH_PASS || '',
+  },
 };
 
 export function assertConfig() {

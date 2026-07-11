@@ -13,30 +13,23 @@ import { r2PublicUrl } from './r2.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 
-app.use(express.static(path.join(__dirname, 'public')));
+// --- Basic Auth (dashboard + admin). Když AUTH_USER/AUTH_PASS chybí, nechrání se. ---
+function basicAuth(req, res, next) {
+  const { user, pass } = CONFIG.auth;
+  if (!user || !pass) return next(); // nenastaveno → veřejné (viz upozornění v logu)
+  const m = (req.headers.authorization || '').match(/^Basic (.+)$/i);
+  if (m) {
+    const [u, p] = Buffer.from(m[1], 'base64').toString('utf8').split(':');
+    if (u === user && p === pass) return next();
+  }
+  res.set('WWW-Authenticate', 'Basic realm="NimeToDex Titulky"');
+  return res.status(401).send('Přihlášení vyžadováno.');
+}
 
-// souhrn pro dashboard
-app.get('/api/overview', (req, res) => {
-  res.json({
-    status: {
-      running: isRunning(),
-      lastRun: getMeta('last_run_iso'),
-      intervalMin: CONFIG.intervalMin,
-    },
-    counts: overviewCounts(),
-    subs: recentSubs(120),
-    runs: recentRuns(12),
-  });
-});
+// ==================================================================
+// VEŘEJNÉ endpointy pro addon (registrované PŘED auth → nechráněné)
+// ==================================================================
 
-// ruční spuštění scrapu
-app.post('/api/run', (req, res) => {
-  if (isRunning()) return res.json({ started: false, reason: 'už běží' });
-  runOnce().catch((e) => console.error('run error', e));
-  res.json({ started: true });
-});
-
-// === LOOKUP endpoint pro addon ===
 // GET /api/subs?anilist=154587&mal=52991&episode=5[&lang=CZ]
 // Vrací stažené titulky (na R2) — přednost anilist, fallback mal.
 app.get('/api/subs', (req, res) => {
@@ -70,9 +63,8 @@ app.get('/api/subs', (req, res) => {
   res.json({ matched_by: matchedBy, count: subs.length, subs });
 });
 
-// === AVAILABILITY endpoint pro addon ===
-// GET /api/subs/available?anilist=154587&mal=52991
-// Rychlá odpověď, zda pro anime máme titulky na R2 (bez plných dat).
+// GET /api/subs/available?anilist=154587&mal=52991[&episode=5]
+// Rychlá odpověď, zda pro anime/díl máme titulky na R2 (bez plných dat).
 app.get('/api/subs/available', (req, res) => {
   const anilist = Number(req.query.anilist) || null;
   const mal = Number(req.query.mal) || null;
@@ -86,11 +78,39 @@ app.get('/api/subs/available', (req, res) => {
   res.json({
     available: a.total > 0,
     matched_by: a.matchedBy,
-    episode, // který díl se ptal (null = celé anime)
+    episode,
     total: a.total,
-    langs: a.langs, // ['CZ','SK']
-    episodes: a.episodes, // [1,2,3,4] (u dotazu na díl jen ten díl)
+    langs: a.langs,
+    episodes: a.episodes,
   });
+});
+
+// ==================================================================
+// Od tohoto bodu je vše CHRÁNĚNO Basic Auth (dashboard + admin)
+// ==================================================================
+app.use(basicAuth);
+
+app.use(express.static(path.join(__dirname, 'public')));
+
+// souhrn pro dashboard
+app.get('/api/overview', (req, res) => {
+  res.json({
+    status: {
+      running: isRunning(),
+      lastRun: getMeta('last_run_iso'),
+      intervalMin: CONFIG.intervalMin,
+    },
+    counts: overviewCounts(),
+    subs: recentSubs(120),
+    runs: recentRuns(12),
+  });
+});
+
+// ruční spuštění scrapu
+app.post('/api/run', (req, res) => {
+  if (isRunning()) return res.json({ started: false, reason: 'už běží' });
+  runOnce().catch((e) => console.error('run error', e));
+  res.json({ started: true });
 });
 
 // stažení konkrétního titulku z UI
@@ -105,6 +125,11 @@ app.get('/api/file/:subId', (req, res) => {
 app.listen(CONFIG.port, () => {
   console.log(`NimeToDex Titulky běží na portu ${CONFIG.port}`);
   console.log(`Data dir: ${CONFIG.dataDir}`);
+  if (!CONFIG.auth.user || !CONFIG.auth.pass) {
+    console.log('⚠ Dashboard NENÍ chráněný (nastav AUTH_USER a AUTH_PASS).');
+  } else {
+    console.log('🔒 Dashboard chráněný Basic Auth.');
+  }
 
   if (CONFIG.runOnBoot) {
     setTimeout(() => runOnce().catch((e) => console.error(e)), 5000);
