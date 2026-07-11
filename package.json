@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "adm-zip": "^0.5.16",
+    "aws4fetch": "^1.0.20",
     "better-sqlite3": "^11.3.0",
     "cheerio": "^1.0.0",
     "express": "^4.21.0",

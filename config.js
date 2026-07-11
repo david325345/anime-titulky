@@ -34,6 +34,9 @@ export const CONFIG = {
   // strop na počet detailů (anime) za jeden běh — ochrana proti hammrování
   maxDetailsPerRun: Number(process.env.MAX_DETAILS_PER_RUN || 80),
 
+  // strop na počet STAŽENÝCH titulků za jeden běh (zbytek počká na příště)
+  maxDownloadsPerRun: Number(process.env.MAX_DOWNLOADS_PER_RUN || 5),
+
   // pauza mezi requesty (ms) — základ; skutečná pauza je náhodná v rozsahu min–max
   requestDelayMs: Number(process.env.REQUEST_DELAY_MS || 2000),
   delayMinMs: Number(process.env.DELAY_MIN_MS || 0), // 0 = odvodit z requestDelayMs
@@ -45,6 +48,16 @@ export const CONFIG = {
   // při HTTP 429/503: kolikrát zkusit znovu a základní čekání (když chybí Retry-After)
   rateLimitRetries: Number(process.env.RATE_LIMIT_RETRIES || 2),
   rateLimitBackoffMs: Number(process.env.RATE_LIMIT_BACKOFF_MS || 30000),
+
+  // Cloudflare R2 (S3 API). Když chybí klíče, upload na R2 se přeskočí (jen lokální uložení).
+  r2: {
+    accountId: process.env.R2_ACCOUNT_ID || '',
+    accessKeyId: process.env.R2_ACCESS_KEY_ID || '',
+    secretKey: process.env.R2_SECRET_ACCESS_KEY || '',
+    bucket: process.env.R2_BUCKET || 'titulky-cache',
+    prefix: process.env.R2_PREFIX || 'subs',
+    publicBase: (process.env.R2_PUBLIC_BASE || '').replace(/\/+$/, ''), // volitelné veřejné URL
+  },
 };
 
 export function assertConfig() {

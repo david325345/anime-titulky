@@ -112,7 +112,8 @@ export const insertSub = (row) => _insertSub.run(row).changes; // 1 = nově vlo�
 
 const _markDownloaded = db.prepare(`
   UPDATE subs SET status='downloaded', filename=@filename, local_path=@local_path,
-    file_bytes=@file_bytes, downloaded_at=@downloaded_at, error=NULL WHERE sub_id=@sub_id
+    file_bytes=@file_bytes, r2_key=@r2_key, downloaded_at=@downloaded_at, error=NULL
+  WHERE sub_id=@sub_id
 `);
 const _markFailed = db.prepare(
   "UPDATE subs SET status='failed', error=@error WHERE sub_id=@sub_id"
@@ -153,3 +154,21 @@ export const recentSubs = (limit = 100) =>
   db.prepare('SELECT * FROM subs ORDER BY first_seen DESC, sub_id DESC LIMIT ?').all(limit);
 export const recentRuns = (limit = 12) =>
   db.prepare('SELECT * FROM runs ORDER BY id DESC LIMIT ?').all(limit);
+
+// kandidáti ke stažení: nedostažené direct + extern (i z minulých běhů), nejstarší první
+export const getDownloadCandidates = (limit = 30) =>
+  db
+    .prepare(
+      `SELECT * FROM subs
+       WHERE status IN ('new','pending_extern')
+       ORDER BY first_seen ASC, sub_id ASC LIMIT ?`
+    )
+    .all(limit);
+
+// přehled extern titulků čekajících na parser, seskupeno podle domény
+export const pendingExternByDomain = () =>
+  db
+    .prepare(
+      "SELECT extern_domain, COUNT(*) AS c FROM subs WHERE status='pending_extern' GROUP BY extern_domain"
+    )
+    .all();
