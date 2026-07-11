@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS subs (
   filename      TEXT,
   local_path    TEXT,
   file_bytes    INTEGER,
+  r2_key        TEXT,           -- klíč na R2 (subs/{anilist}/E{ep}/...gz)
   downloaded_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_subs_status   ON subs(status);
@@ -72,6 +73,15 @@ CREATE TABLE IF NOT EXISTS runs (
   error          TEXT
 );
 `);
+
+// --- migrace: doplní chybějící sloupce ve starších DB (idempotentně) ---
+function ensureColumn(table, column, type) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+  if (!cols.some((c) => c.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+  }
+}
+ensureColumn('subs', 'r2_key', 'TEXT');
 
 // --- meta helpers ---
 const _getMeta = db.prepare('SELECT value FROM meta WHERE key=?');
