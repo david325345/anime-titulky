@@ -21,13 +21,15 @@ function captureSetCookies(res) {
   }
 }
 
-function baseHeaders(extra = {}) {
-  return {
+function baseHeaders(extra = {}, withCookie = false) {
+  const h = {
     'User-Agent': CONFIG.userAgent,
     Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
     'Accept-Language': 'cs,sk;q=0.9,en;q=0.8',
     ...extra,
   };
+  if (withCookie && cookies.size) h.Cookie = cookieHeader();
+  return h;
 }
 
 export function isLoggedIn() {
@@ -96,7 +98,7 @@ export async function getHtml(pathOrUrl, { referer } = {}) {
   await ensureLogin();
   for (let attempt = 0; attempt < 2; attempt++) {
     const res = await fetch(url, {
-      headers: baseHeaders({ Referer: referer || CONFIG.baseUrl + '/' }),
+      headers: baseHeaders({ Referer: referer || CONFIG.baseUrl + '/' }, true),
       redirect: 'follow',
     });
     captureSetCookies(res);
@@ -116,7 +118,7 @@ export async function getBinary(pathOrUrl, { referer } = {}) {
   await ensureLogin();
   for (let attempt = 0; attempt < 2; attempt++) {
     const res = await fetch(url, {
-      headers: baseHeaders({ Referer: referer || CONFIG.baseUrl + '/' }),
+      headers: baseHeaders({ Referer: referer || CONFIG.baseUrl + '/' }, true),
       redirect: 'manual',
     });
     captureSetCookies(res);
