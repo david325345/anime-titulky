@@ -6,6 +6,7 @@
 // (zkopíruj z DevTools → Application → Cookies; přihlas se se zaškrtnutým Remember me)
 
 import { CONFIG } from '../../config.js';
+import { hostGate } from '../ratelimit.js';
 
 const BASE = 'https://www.underkotatsusubs.cz';
 
@@ -35,6 +36,8 @@ function assertCookie() {
 export async function getHtml(url) {
   assertCookie();
   const abs = url.startsWith('http') ? url : BASE + url;
+  await hostGate(abs);
+  await hostGate(abs);
   const res = await fetch(abs, { headers: headers(), redirect: 'follow' });
   const text = await res.text();
   if (!/logged-in|logout|wp-admin|Odhlás/i.test(text)) {
@@ -47,6 +50,7 @@ export async function getHtml(url) {
 export async function getBinary(url, { referer } = {}) {
   assertCookie();
   const abs = url.startsWith('http') ? url : BASE + url;
+  await hostGate(abs);
   const res = await fetch(abs, {
     headers: headers({ Referer: referer || BASE + '/' }),
     redirect: 'manual',

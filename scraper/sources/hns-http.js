@@ -5,6 +5,7 @@
 
 import * as cheerio from 'cheerio';
 import { CONFIG } from '../../config.js';
+import { hostGate } from '../ratelimit.js';
 
 const BASE = 'https://hns.sk';
 const cookies = new Map();
@@ -52,6 +53,7 @@ export async function login() {
       throw new Error('Chybí přihlášení k hns.sk (env HNS_EMAIL / HNS_PASS).');
     }
     // 1) GET login formulář → CSRF token
+    await hostGate(BASE);
     const gres = await fetch(BASE + '/site/login', {
       headers: headers({}, true),
       redirect: 'follow',
@@ -70,6 +72,7 @@ export async function login() {
       'LoginForm[password]': pass,
       'LoginForm[rememberMe]': '1',
     });
+    await hostGate(BASE);
     const pres = await fetch(BASE + '/site/login', {
       method: 'POST',
       headers: headers(
@@ -103,7 +106,9 @@ export async function getHtml(url) {
   await ensureLogin();
   const abs = url.startsWith('http') ? url : BASE + url;
   for (let attempt = 0; attempt < 2; attempt++) {
-    const res = await fetch(abs, { headers: headers({}, true), redirect: 'manual' });
+    await hostGate(abs);
+    await hostGate(abs);
+  const res = await fetch(abs, { headers: headers({}, true), redirect: 'manual' });
     capture(res);
     if (res.status >= 300 && res.status < 400 && /\/site\/login/.test(res.headers.get('location') || '')) {
       await res.arrayBuffer().catch(() => {});
@@ -119,6 +124,7 @@ export async function postBinary(url, form) {
   await ensureLogin();
   const abs = url.startsWith('http') ? url : BASE + url;
   const body = new URLSearchParams(form);
+  await hostGate(abs);
   const res = await fetch(abs, {
     method: 'POST',
     headers: headers(

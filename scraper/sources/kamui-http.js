@@ -4,6 +4,7 @@
 // Env: KAMUI_USER / KAMUI_PASS.
 
 import { CONFIG } from '../../config.js';
+import { hostGate } from '../ratelimit.js';
 
 const BASE = 'https://kamui-subs.cz';
 const cookies = new Map();
@@ -52,6 +53,7 @@ export async function login() {
       throw new Error('Chybí přihlášení ke kamui-subs.cz (env KAMUI_USER / KAMUI_PASS).');
     }
     // 1) GET wp-login → wordpress_test_cookie
+    await hostGate(BASE);
     const gres = await fetch(BASE + '/wp-login.php', {
       headers: headers({}, true),
       redirect: 'follow',
@@ -67,6 +69,7 @@ export async function login() {
       redirect_to: BASE + '/',
       testcookie: '1',
     });
+    await hostGate(BASE);
     const pres = await fetch(BASE + '/wp-login.php', {
       method: 'POST',
       headers: headers(
@@ -100,6 +103,8 @@ export async function getHtml(url) {
   await ensureLogin();
   const abs = url.startsWith('http') ? url : BASE + url;
   for (let attempt = 0; attempt < 2; attempt++) {
+    await hostGate(abs);
+    await hostGate(abs);
     const res = await fetch(abs, { headers: headers({}, true), redirect: 'follow' });
     capture(res);
     const text = await res.text();
@@ -115,6 +120,7 @@ export async function getBinary(url, { referer } = {}) {
   await ensureLogin();
   const abs = url.startsWith('http') ? url : BASE + url;
   for (let attempt = 0; attempt < 2; attempt++) {
+    await hostGate(abs);
     const res = await fetch(abs, {
       headers: headers({ Referer: referer || BASE + '/' }, true),
       redirect: 'manual',

@@ -11,6 +11,7 @@ import * as cheerio from 'cheerio';
 import { File as MegaFile } from 'megajs';
 import { saveSubFile } from '../download.js';
 import { CONFIG } from '../../config.js';
+import { hostGate } from '../ratelimit.js';
 
 export const name = 'hannya-subs.blogspot.com';
 
@@ -18,6 +19,7 @@ const MEGA_RE = /mega\.nz\/file\//i;
 
 // z blogspot článku udělá mapu {episode: megaUrl}
 async function episodeMap(articleUrl) {
+  await hostGate(articleUrl);
   const res = await fetch(articleUrl, {
     headers: { 'User-Agent': CONFIG.userAgent, 'Accept-Language': 'cs,sk;q=0.9' },
   });
