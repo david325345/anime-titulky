@@ -26,8 +26,9 @@ function extractTitleType($) {
   return { title, type };
 }
 
-// z jednoho <tr> vytáhne titulek. Vrací null, pokud řádek není titulkový.
-function parseRow($, tr) {
+// z jednoho <tr> vytáhne titulek. col = mapa {klíč: index sloupce} z hlavičky.
+// Vrací null, pokud řádek není titulkový.
+function parseRow($, tr, col) {
   const $tr = $(tr);
   const dl = $tr.find('a[onclick^="DownloadSubtitles"], a[onclick^="DownloadExternSubtitles"]').first();
   if (!dl.length) return null;
@@ -47,13 +48,27 @@ function parseRow($, tr) {
     }
   }
 
-  // projdeme buňky řádku
-  const tds = $tr.find('td').toArray().map((td) => $(td).text().replace(/\s+/g, ' ').trim());
+  // buňky řádku jako pole (podle indexu z hlavičky)
+  const cells = $tr.find('td').toArray().map((td) => $(td).text().replace(/\s+/g, ' ').trim());
   const rowText = $tr.text().replace(/\s+/g, ' ').trim();
+  const at = (key) => (col[key] != null ? cells[col[key]] : undefined);
 
-  const episode = Number(rowText.match(/Epizoda\s*:?\s*(\d+)/i)?.[1]) || null;
-  const lang = tds.find((t) => /^(CZ|SK|CS)$/i.test(t)) || null;
-  const addedDate = rowText.match(/\b(\d{1,2}\.\d{1,2}\.\d{4})\b/)?.[1] || null;
+  // číslo dílu: primárně sloupec '#', fallback na "Epizoda N" v textu
+  let episode =
+    Number((at('episode') || '').match(/\d+/)?.[0]) ||
+    Number(rowText.match(/Epizoda\s*:?\s*(\d+)/i)?.[1]) ||
+    null;
+
+  const langRaw = at('lang') || cells.find((t) => /^(CZ|SK|CS)$/i.test(t)) || null;
+  const lang = langRaw ? langRaw.toUpperCase().replace('CS', 'CZ') : null;
+
+  const release = at('release') || null;
+  const episodeName = at('name') || null; // název dílu ("Nové dny")
+
+  const addedDate =
+    (at('date') || '').match(/\d{1,2}\.\d{1,2}\.\d{4}/)?.[0] ||
+    rowText.match(/\b(\d{1,2}\.\d{1,2}\.\d{4})\b/)?.[1] ||
+    null;
   const version = rowText.match(/Verze:\s*([^\s<]+)/i)?.[1] || null;
 
   const fansubA = $tr.find('a[href^="/fansuby/"]').first();
@@ -61,35 +76,46 @@ function parseRow($, tr) {
   const groupName =
     fansubA.find('b').first().text().trim() || fansubA.text().replace(/\s+/g, ' ').trim() || null;
 
-  // release = krátká text-center buňka, která není epizoda/jazyk/datum/skupina/sub_id
-  let release = null;
-  for (const t of tds) {
-    if (!t) continue;
-    if (/^\d+$/.test(t)) continue;
-    if (/Epizoda/i.test(t)) continue;
-    if (/^(CZ|SK|CS)$/i.test(t)) continue;
-    if (/\d{1,2}\.\d{1,2}\.\d{4}/.test(t)) continue;
-    if (/Verze/i.test(t)) continue;
-    if (groupName && t === groupName) continue;
-    if (t.length > 60) continue; // autoři/dlouhé texty přeskočíme
-    if (/Překlad|Korektura|Časování|Navštíveno/i.test(t)) continue;
-    release = t;
-    break;
-  }
-
   return {
     sub_id: subId,
     episode,
-    lang: lang ? lang.toUpperCase().replace('CS', 'CZ') : null,
+    episode_name: episodeName,
+    lang,
     group_id: groupId,
     group_name: groupName,
-    release,
+    release: release && release.length <= 60 ? release : null,
     version,
     kind: isExtern ? 'extern' : 'direct',
     url,
     extern_domain: externDomain,
     added_date: addedDate,
   };
+}
+
+// z <thead> tabulky titulků udělá mapu {klíč: index sloupce}
+function buildColumnMap($) {
+  // najdi tabulku, která má download tlačítka (tabulka titulků)
+  let table = $('table').filter((_, t) =>
+    $(t).find('a[onclick^="DownloadSubtitles"], a[onclick^="DownloadExternSubtitles"]').length > 0
+  ).first();
+  if (!table.length) table = $('table').first();
+
+  const headers = table
+    .find('thead th')
+    .toArray()
+    .map((th) => $(th).text().replace(/\s+/g, ' ').trim().toLowerCase());
+
+  const col = {};
+  headers.forEach((h, i) => {
+    if (h === '#' || /epizod|díl|dil/.test(h)) col.episode ??= i;
+    else if (/n[áa]zev|title/.test(h)) col.name ??= i;
+    else if (/jazyk|lang/.test(h)) col.lang ??= i;
+    else if (/release/.test(h)) col.release ??= i;
+    else if (/fansub|skupin|group/.test(h)) col.group ??= i;
+    else if (/přid|pridan|datum|date/.test(h)) col.date ??= i;
+    else if (/verze|version/.test(h)) col.version ??= i;
+  });
+  return col;
 }
 
 export async function getDetail(hiyoriId) {
@@ -100,10 +126,11 @@ export async function getDetail(hiyoriId) {
 
   const ids = extractIds($);
   const meta = extractTitleType($);
+  const col = buildColumnMap($);
 
   const rows = [];
   $('tr').each((_, tr) => {
-    const r = parseRow($, tr);
+    const r = parseRow($, tr, col);
     if (r) rows.push(r);
   });
 
