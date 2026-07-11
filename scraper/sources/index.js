@@ -5,12 +5,14 @@ import * as wosir from './wosir.js';
 import * as hns from './hns.js';
 import * as hannyasubs from './hannyasubs.js';
 import * as kamui from './kamui.js';
+import * as underkotatsu from './underkotatsu.js';
 
 const SOURCES = {
   'wosir.cz': wosir,
   'hns.sk': hns,
   'hannya-subs.blogspot.com': hannyasubs,
   'kamui-subs.cz': kamui,
+  'underkotatsusubs.cz': underkotatsu,
   // 'dalsi-web.cz': dalsiModul,
 };
 
