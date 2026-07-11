@@ -34,8 +34,17 @@ export const CONFIG = {
   // strop na počet detailů (anime) za jeden běh — ochrana proti hammrování
   maxDetailsPerRun: Number(process.env.MAX_DETAILS_PER_RUN || 80),
 
-  // pauza mezi requesty (ms) — buď slušný k serveru
-  requestDelayMs: Number(process.env.REQUEST_DELAY_MS || 1500),
+  // pauza mezi requesty (ms) — základ; skutečná pauza je náhodná v rozsahu min–max
+  requestDelayMs: Number(process.env.REQUEST_DELAY_MS || 2000),
+  delayMinMs: Number(process.env.DELAY_MIN_MS || 0), // 0 = odvodit z requestDelayMs
+  delayMaxMs: Number(process.env.DELAY_MAX_MS || 0),
+
+  // anti-ban: kolik requestů za sebou smí selhat, než běh utneme
+  maxConsecutiveErrors: Number(process.env.MAX_CONSECUTIVE_ERRORS || 4),
+
+  // při HTTP 429/503: kolikrát zkusit znovu a základní čekání (když chybí Retry-After)
+  rateLimitRetries: Number(process.env.RATE_LIMIT_RETRIES || 2),
+  rateLimitBackoffMs: Number(process.env.RATE_LIMIT_BACKOFF_MS || 30000),
 };
 
 export function assertConfig() {
