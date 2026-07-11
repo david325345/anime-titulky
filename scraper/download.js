@@ -2,8 +2,10 @@
 // Externí (wosir/hns) řeší scraper/sources/ (zatím placeholdery).
 import fs from 'node:fs';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { getBinary } from './http.js';
 import { CONFIG } from '../config.js';
+import { r2Enabled, r2Put, r2PublicUrl } from '../r2.js';
 
 // název z Content-Disposition: filename="..." (příp. filename*=UTF-8''...)
 function filenameFromCD(cd, fallback) {
@@ -26,23 +28,37 @@ function sanitize(name) {
     .slice(0, 180);
 }
 
-// Sdílené uložení titulku na disk (používá direct i externí parsery).
-// Vrací {filename, local_path, file_bytes}.
-export function saveSubFile(sub, buf, rawName) {
+function contentTypeFor(name) {
+  if (/\.(ass|ssa|srt|sub|vtt|txt)$/i.test(name)) return 'text/plain; charset=utf-8';
+  if (/\.zip$/i.test(name)) return 'application/zip';
+  return 'application/octet-stream';
+}
+
+// Sdílené uložení titulku: lokálně (DATA_DIR) + upload na R2 (pokud je nastaven).
+// Vrací {filename, local_path, file_bytes, r2_key, r2_url}.
+export async function saveSubFile(sub, buf, rawName) {
   const filename = sanitize(rawName || `sub-${sub.sub_id}.ass`);
+  const animeKey = String(sub.anilist_id || `hiyori-${sub.hiyori_id}`);
+  const epKey = sub.episode != null ? `E${sub.episode}` : 'E_';
+  const outName = `${sub.sub_id}__${filename}`; // prefix sub_id proti kolizím názvů
 
-  // struktura: {DATA_DIR}/files/{anilist_id|hiyori_id}/E{episode}/{filename}
-  const animeDir = String(sub.anilist_id || `hiyori-${sub.hiyori_id}`);
-  const epDir = sub.episode != null ? `E${sub.episode}` : 'E_';
-  const dir = path.join(CONFIG.dataDir, 'files', animeDir, epDir);
+  // 1) lokální kopie (pracovní cache)
+  const dir = path.join(CONFIG.dataDir, 'files', animeKey, epKey);
   fs.mkdirSync(dir, { recursive: true });
-
-  // prefix sub_id, ať se různé skupiny se stejným názvem nepřepíšou
-  const outName = `${sub.sub_id}__${filename}`;
   const local_path = path.join(dir, outName);
   fs.writeFileSync(local_path, buf);
 
-  return { filename: outName, local_path, file_bytes: buf.length };
+  // 2) R2 (durable) — kanonický klíč anilist+episode, uloženo jako gzip (úspora místa)
+  let r2_key = null;
+  let r2_url = null;
+  if (r2Enabled()) {
+    r2_key = `${CONFIG.r2.prefix}/${animeKey}/${epKey}/${outName}.gz`;
+    const gz = zlib.gzipSync(buf);
+    await r2Put(r2_key, gz, 'application/gzip'); // chyba → probublá, status=failed
+    r2_url = r2PublicUrl(r2_key);
+  }
+
+  return { filename: outName, local_path, file_bytes: buf.length, r2_key, r2_url };
 }
 
 // stáhne přímý titulek z hiyori a uloží. Vrací {filename, local_path, file_bytes}.
@@ -51,5 +67,5 @@ export async function downloadDirect(sub) {
     referer: `https://hiyori.cz/anime/${sub.hiyori_id}`,
   });
   const rawName = filenameFromCD(contentDisposition, `sub-${sub.sub_id}.ass`);
-  return saveSubFile(sub, buf, rawName);
+  return await saveSubFile(sub, buf, rawName);
 }
