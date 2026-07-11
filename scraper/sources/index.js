@@ -4,11 +4,13 @@
 import * as wosir from './wosir.js';
 import * as hns from './hns.js';
 import * as hannyasubs from './hannyasubs.js';
+import * as kamui from './kamui.js';
 
 const SOURCES = {
   'wosir.cz': wosir,
   'hns.sk': hns,
   'hannya-subs.blogspot.com': hannyasubs,
+  'kamui-subs.cz': kamui,
   // 'dalsi-web.cz': dalsiModul,
 };
 
