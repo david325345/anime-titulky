@@ -83,7 +83,7 @@ function parseRow($, tr, col) {
     lang,
     group_id: groupId,
     group_name: groupName,
-    release: release && release.length <= 60 ? release : null,
+    release: release && release.length <= 300 ? release : null,
     version,
     kind: isExtern ? 'extern' : 'direct',
     url,
