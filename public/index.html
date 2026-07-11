@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>NimeToDex · Titulky</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">NimeToDex<span>· Titulky</span></div>
+    <div class="actions">
+      <span id="lastRun" class="muted">—</span>
+      <button id="runBtn">Spustit teď</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="cards" id="stats"></section>
+
+    <section class="panel">
+      <h2>Poslední přidané titulky</h2>
+      <div class="table-wrap">
+        <table id="subsTable">
+          <thead>
+            <tr>
+              <th>Kdy</th><th>Anime</th><th>Ep</th><th>Jazyk</th>
+              <th>Skupina</th><th>Release</th><th>Zdroj</th><th>Stav</th><th></th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Historie běhů</h2>
+      <div class="table-wrap">
+        <table id="runsTable">
+          <thead>
+            <tr>
+              <th>Start</th><th>Trvání</th><th>Karet</th><th>Anime</th>
+              <th>Nové</th><th>Staženo</th><th>Extern</th><th>Chyby</th><th>Stav</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>
