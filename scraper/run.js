@@ -8,6 +8,7 @@ import { sleep, throttle, RateLimited } from './http.js';
 import {
   getMeta, setMeta, upsertAnime, insertSub, getSub,
   markDownloaded, markFailed, startRun, finishRun,
+  getDownloadCandidates, pendingExternByDomain,
 } from '../db.js';
 
 let running = false;
@@ -51,7 +52,6 @@ export async function runOnce({ log = console.log } = {}) {
     log(`Ke kontrole: ${ids.length} anime (z ${byId.size} čerstvých)`);
 
     // 4) detaily
-    const toDownload = [];
     let consecErrors = 0;
     for (const hiyoriId of ids) {
       stats.anime_checked++;
@@ -91,13 +91,7 @@ export async function runOnce({ log = console.log } = {}) {
                   : 'not_downloaded'
                 : 'pending_extern',
           });
-          if (changed) {
-            stats.new_subs++;
-            if (!CONFIG.downloadEnabled) continue; // jen evidujeme, nestahujeme
-            if (row.kind === 'direct') toDownload.push(row.sub_id);
-            else if (!hasSourceFor(row.extern_domain)) stats.extern_pending++;
-            else toDownload.push(row.sub_id); // extern s hotovým parserem
-          }
+          if (changed) stats.new_subs++;
         }
         consecErrors = 0; // úspěch → vynulovat řadu chyb
       } catch (e) {
@@ -116,12 +110,28 @@ export async function runOnce({ log = console.log } = {}) {
       await throttle();
     }
 
-    // 5) stahování nových titulků (zatím vypnuto → jen evidujeme)
+    // 5) stahování — fronta z DB (i nedostažené z minulých běhů), limit za běh
     if (!CONFIG.downloadEnabled) {
       log('Stahování vypnuté (DOWNLOAD_ENABLED != true) — jen evidence.');
     }
-    if (CONFIG.downloadEnabled) log(`Ke stažení: ${toDownload.length}`);
-    for (const subId of CONFIG.downloadEnabled ? toDownload : []) {
+    let batch = [];
+    if (CONFIG.downloadEnabled) {
+      const candidates = getDownloadCandidates(CONFIG.maxDownloadsPerRun * 6);
+      for (const s of candidates) {
+        if (batch.length >= CONFIG.maxDownloadsPerRun) break;
+        if (s.kind === 'direct') batch.push(s.sub_id);
+        else if (s.kind === 'extern' && hasSourceFor(s.extern_domain)) batch.push(s.sub_id);
+      }
+      // kolik extern titulků čeká na dosud nenapsaný parser (jen pro přehled)
+      stats.extern_pending = pendingExternByDomain()
+        .filter((r) => !hasSourceFor(r.extern_domain))
+        .reduce((sum, r) => sum + r.c, 0);
+      log(
+        `Ke stažení teď: ${batch.length}` +
+        (candidates.length > batch.length ? ` (limit ${CONFIG.maxDownloadsPerRun}/běh, ve frontě víc)` : '')
+      );
+    }
+    for (const subId of batch) {
       const sub = getSub(subId);
       if (!sub) continue;
       try {
@@ -130,7 +140,7 @@ export async function runOnce({ log = console.log } = {}) {
           res = await downloadDirect(sub);
         } else {
           const ext = await downloadExtern(sub);
-          if (!ext.supported) { stats.extern_pending++; continue; }
+          if (!ext.supported) continue; // parser pro tuto doménu ještě není
           res = ext;
         }
         markDownloaded({
@@ -138,6 +148,7 @@ export async function runOnce({ log = console.log } = {}) {
           filename: res.filename,
           local_path: res.local_path,
           file_bytes: res.file_bytes,
+          r2_key: res.r2_key ?? null,
         });
         stats.downloaded++;
       } catch (e) {
