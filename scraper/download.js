@@ -47,14 +47,7 @@ export async function saveSubFile(sub, buf, rawName) {
   else if (sub.mal_id) animeSeg = `mal/${sub.mal_id}`;
   else animeSeg = `hiyori/${sub.hiyori_id}`;
 
-  // 1) lokální kopie (pracovní cache) — plochá struktura podle animeSeg
-  const localAnime = animeSeg.replace('/', '-'); // al-12345 / mal-678 / hiyori-90
-  const dir = path.join(CONFIG.dataDir, 'files', localAnime, epKey);
-  fs.mkdirSync(dir, { recursive: true });
-  const local_path = path.join(dir, outName);
-  fs.writeFileSync(local_path, buf);
-
-  // 2) R2 (durable) — klíč subs/{al|mal|hiyori}/{id}/E{ep}/...gz
+  // R2 (durable, gzip) — primární úložiště. Klíč subs/{al|mal|hiyori}/{id}/E{ep}/...gz
   let r2_key = null;
   let r2_url = null;
   if (r2Enabled()) {
@@ -62,6 +55,16 @@ export async function saveSubFile(sub, buf, rawName) {
     const gz = zlib.gzipSync(buf);
     await r2Put(r2_key, gz, 'application/gzip'); // chyba → probublá, status=failed
     r2_url = r2PublicUrl(r2_key);
+  }
+
+  // lokální kopie POUZE jako záloha, když R2 není k dispozici (jinak nic lokálně nedržíme)
+  let local_path = null;
+  if (!r2Enabled()) {
+    const localAnime = animeSeg.replace('/', '-');
+    const dir = path.join(CONFIG.dataDir, 'files', localAnime, epKey);
+    fs.mkdirSync(dir, { recursive: true });
+    local_path = path.join(dir, outName);
+    fs.writeFileSync(local_path, buf);
   }
 
   return { filename: outName, local_path, file_bytes: buf.length, r2_key, r2_url };
