@@ -38,21 +38,27 @@ function contentTypeFor(name) {
 // Vrací {filename, local_path, file_bytes, r2_key, r2_url}.
 export async function saveSubFile(sub, buf, rawName) {
   const filename = sanitize(rawName || `sub-${sub.sub_id}.ass`);
-  const animeKey = String(sub.anilist_id || `hiyori-${sub.hiyori_id}`);
-  const epKey = sub.episode != null ? `E${sub.episode}` : 'E_';
   const outName = `${sub.sub_id}__${filename}`; // prefix sub_id proti kolizím názvů
+  const epKey = sub.episode != null ? `E${sub.episode}` : 'E_';
 
-  // 1) lokální kopie (pracovní cache)
-  const dir = path.join(CONFIG.dataDir, 'files', animeKey, epKey);
+  // kanonický "adresář" anime: primárně anilist, jinak mal, jinak hiyori id
+  let animeSeg;
+  if (sub.anilist_id) animeSeg = `al/${sub.anilist_id}`;
+  else if (sub.mal_id) animeSeg = `mal/${sub.mal_id}`;
+  else animeSeg = `hiyori/${sub.hiyori_id}`;
+
+  // 1) lokální kopie (pracovní cache) — plochá struktura podle animeSeg
+  const localAnime = animeSeg.replace('/', '-'); // al-12345 / mal-678 / hiyori-90
+  const dir = path.join(CONFIG.dataDir, 'files', localAnime, epKey);
   fs.mkdirSync(dir, { recursive: true });
   const local_path = path.join(dir, outName);
   fs.writeFileSync(local_path, buf);
 
-  // 2) R2 (durable) — kanonický klíč anilist+episode, uloženo jako gzip (úspora místa)
+  // 2) R2 (durable) — klíč subs/{al|mal|hiyori}/{id}/E{ep}/...gz
   let r2_key = null;
   let r2_url = null;
   if (r2Enabled()) {
-    r2_key = `${CONFIG.r2.prefix}/${animeKey}/${epKey}/${outName}.gz`;
+    r2_key = `${CONFIG.r2.prefix}/${animeSeg}/${epKey}/${outName}.gz`;
     const gz = zlib.gzipSync(buf);
     await r2Put(r2_key, gz, 'application/gzip'); // chyba → probublá, status=failed
     r2_url = r2PublicUrl(r2_key);
