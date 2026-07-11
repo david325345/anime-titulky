@@ -1,6 +1,7 @@
 // scraper/http.js — správa session (cookie 'Hiyori'), login a autentizované requesty.
 // Bez prohlížeče, přes nativní fetch (Node 20+). Login formulář hiyori NEMÁ captchu.
 import { CONFIG } from '../config.js';
+import { hostGate } from './ratelimit.js';
 
 const cookies = new Map(); // name -> value
 
@@ -83,6 +84,7 @@ export async function login() {
   if (loginInFlight) return loginInFlight;
   loginInFlight = (async () => {
     // 1) warm-up GET (může nastavit init cookie)
+    await hostGate(CONFIG.baseUrl);
     const home = await fetch(CONFIG.baseUrl + '/', {
       headers: baseHeaders(),
       redirect: 'manual',
@@ -96,6 +98,7 @@ export async function login() {
       Password: CONFIG.pass, // pozor: velké 'P' (přesně jak má formulář)
       remember_me: 'true',
     });
+    await hostGate(CONFIG.baseUrl);
     const res = await fetch(CONFIG.baseUrl + '/account/login', {
       method: 'POST',
       headers: baseHeaders({
@@ -139,6 +142,7 @@ export async function getHtml(pathOrUrl, { referer } = {}) {
   let rlTries = 0;
   let loginTries = 0;
   while (true) {
+    await hostGate(url);
     const res = await fetch(url, {
       headers: baseHeaders({ Referer: referer || CONFIG.baseUrl + '/' }, true),
       redirect: 'follow',
@@ -163,6 +167,7 @@ export async function getBinary(pathOrUrl, { referer } = {}) {
   let rlTries = 0;
   let loginTries = 0;
   while (true) {
+    await hostGate(url);
     const res = await fetch(url, {
       headers: baseHeaders({ Referer: referer || CONFIG.baseUrl + '/' }, true),
       redirect: 'manual',
