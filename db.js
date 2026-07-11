@@ -208,3 +208,32 @@ export function findSubs({ anilist = null, mal = null, episode = null, lang = nu
   }
   return { matchedBy: null, rows: [] };
 }
+
+// availability: souhrn, zda pro anilist/mal máme titulky na R2 (bez plných dat).
+// Vrací {matchedBy, total, langs, episodes} — nebo total 0.
+export function subsAvailability({ anilist = null, mal = null }) {
+  const base =
+    "FROM subs WHERE status='downloaded' AND r2_key IS NOT NULL AND r2_key<>''";
+
+  const summarize = (idCol, id) => {
+    const rows = db
+      .prepare(`SELECT episode, lang ${base} AND ${idCol}=?`)
+      .all(id);
+    if (!rows.length) return null;
+    const langs = [...new Set(rows.map((r) => r.lang).filter(Boolean))].sort();
+    const episodes = [
+      ...new Set(rows.map((r) => r.episode).filter((e) => e != null)),
+    ].sort((a, b) => a - b);
+    return { total: rows.length, langs, episodes };
+  };
+
+  if (anilist) {
+    const s = summarize('anilist_id', anilist);
+    if (s) return { matchedBy: 'anilist', ...s };
+  }
+  if (mal) {
+    const s = summarize('mal_id', mal);
+    if (s) return { matchedBy: 'mal', ...s };
+  }
+  return { matchedBy: null, total: 0, langs: [], episodes: [] };
+}

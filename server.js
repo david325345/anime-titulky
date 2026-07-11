@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { CONFIG } from './config.js';
 import { runOnce, isRunning } from './scraper/run.js';
 import {
-  overviewCounts, recentSubs, recentRuns, getMeta, getSub, findSubs,
+  overviewCounts, recentSubs, recentRuns, getMeta, getSub, findSubs, subsAvailability,
 } from './db.js';
 import { r2PublicUrl } from './r2.js';
 
@@ -68,6 +68,25 @@ app.get('/api/subs', (req, res) => {
   }));
 
   res.json({ matched_by: matchedBy, count: subs.length, subs });
+});
+
+// === AVAILABILITY endpoint pro addon ===
+// GET /api/subs/available?anilist=154587&mal=52991
+// Rychlá odpověď, zda pro anime máme titulky na R2 (bez plných dat).
+app.get('/api/subs/available', (req, res) => {
+  const anilist = Number(req.query.anilist) || null;
+  const mal = Number(req.query.mal) || null;
+  if (!anilist && !mal) {
+    return res.status(400).json({ error: 'Zadej anilist a/nebo mal.' });
+  }
+  const a = subsAvailability({ anilist, mal });
+  res.json({
+    available: a.total > 0,
+    matched_by: a.matchedBy,
+    total: a.total,
+    langs: a.langs, // ['CZ','SK']
+    episodes: a.episodes, // [1,2,3,4]
+  });
 });
 
 // stažení konkrétního titulku z UI
