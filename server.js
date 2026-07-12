@@ -4,7 +4,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { CONFIG } from './config.js';
-import { runOnce, isRunning, ingestAnime } from './scraper/run.js';
+import { runOnce, downloadOnce, isRunning, ingestAnime } from './scraper/run.js';
 import {
   overviewCounts, recentSubs, recentRuns, getMeta, getSub, findSubs, subsAvailability,
   listSubs, deleteSub, recentlyAdded,
@@ -148,10 +148,30 @@ app.delete('/api/sub/:subId', (req, res) => {
   res.json({ deleted: n > 0 });
 });
 
-// ruční spuštění scrapu
+// (pře)plánování hodinového intervalu — resetuje se při každém ručním spuštění.
+let intervalTimer = null;
+function scheduleInterval() {
+  if (CONFIG.intervalMin <= 0) return;
+  if (intervalTimer) clearInterval(intervalTimer);
+  intervalTimer = setInterval(
+    () => runOnce().catch((e) => console.error(e)),
+    CONFIG.intervalMin * 60 * 1000
+  );
+  console.log(`Automatický scrape naplánován každých ${CONFIG.intervalMin} min (od teď).`);
+}
+
+// ruční plný běh (fetch hiyori + parsování + stahování). Reset intervalu.
 app.post('/api/run', (req, res) => {
   if (isRunning()) return res.json({ started: false, reason: 'už běží' });
   runOnce().catch((e) => console.error('run error', e));
+  scheduleInterval(); // od teď zas každou hodinu
+  res.json({ started: true });
+});
+
+// ruční JEN stahování z fronty (bez fetche na hiyori). Neplánuje interval.
+app.post('/api/download-only', (req, res) => {
+  if (isRunning()) return res.json({ started: false, reason: 'už běží' });
+  downloadOnce().catch((e) => console.error('download-only error', e));
   res.json({ started: true });
 });
 
@@ -222,14 +242,7 @@ app.listen(CONFIG.port, () => {
     console.log('🔒 Dashboard chráněný Basic Auth.');
   }
 
-  if (CONFIG.runOnBoot) {
-    setTimeout(() => runOnce().catch((e) => console.error(e)), 5000);
-  }
-  if (CONFIG.intervalMin > 0) {
-    setInterval(
-      () => runOnce().catch((e) => console.error(e)),
-      CONFIG.intervalMin * 60 * 1000
-    );
-    console.log(`Automatický scrape každých ${CONFIG.intervalMin} min.`);
-  }
+  // Žádný automatický fetch po startu ani pevný interval.
+  // Interval se rozjede až po ručním "Spustit teď" (viz scheduleInterval).
+  console.log('Po startu se automaticky NEfetchuje. Spusť ručně přes "Spustit teď".');
 });
