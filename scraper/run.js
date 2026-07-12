@@ -14,6 +14,53 @@ import {
 let running = false;
 export const isRunning = () => running;
 
+// Naparsuje jedno anime z hiyori (detail) a uloží jeho titulky do DB.
+// Vrací { found, added, title, anilistId, malId }. Používá běh i ruční přidání z UI.
+export async function ingestAnime(hiyoriId, card = {}) {
+  const detail = await getDetail(hiyoriId);
+  upsertAnime({
+    hiyori_id: hiyoriId,
+    anilist_id: detail.anilist_id,
+    mal_id: detail.mal_id,
+    title: detail.title || card.title,
+    type: detail.type,
+  });
+
+  let added = 0;
+  for (const row of detail.rows) {
+    const changed = insertSub({
+      sub_id: row.sub_id,
+      hiyori_id: hiyoriId,
+      anilist_id: detail.anilist_id,
+      mal_id: detail.mal_id,
+      anime_title: detail.title || card.title,
+      episode: row.episode,
+      lang: row.lang || card.lang,
+      group_id: row.group_id,
+      group_name: row.group_name,
+      release: row.release,
+      version: row.version,
+      kind: row.kind,
+      url: row.url,
+      extern_domain: row.extern_domain,
+      added_date: row.added_date || card.addedDate,
+      first_seen: new Date().toISOString(),
+      status:
+        row.kind === 'direct'
+          ? CONFIG.downloadEnabled ? 'new' : 'not_downloaded'
+          : 'pending_extern',
+    });
+    if (changed) added++;
+  }
+  return {
+    found: detail.rows.length,
+    added,
+    title: detail.title,
+    anilistId: detail.anilist_id,
+    malId: detail.mal_id,
+  };
+}
+
 export async function runOnce({ log = console.log } = {}) {
   if (running) {
     log('Scrape už běží, přeskočeno.');
@@ -57,42 +104,8 @@ export async function runOnce({ log = console.log } = {}) {
       stats.anime_checked++;
       const card = byId.get(hiyoriId);
       try {
-        const detail = await getDetail(hiyoriId);
-        upsertAnime({
-          hiyori_id: hiyoriId,
-          anilist_id: detail.anilist_id,
-          mal_id: detail.mal_id,
-          title: detail.title || card.title,
-          type: detail.type,
-        });
-
-        for (const row of detail.rows) {
-          const changed = insertSub({
-            sub_id: row.sub_id,
-            hiyori_id: hiyoriId,
-            anilist_id: detail.anilist_id,
-            mal_id: detail.mal_id,
-            anime_title: detail.title || card.title,
-            episode: row.episode,
-            lang: row.lang || card.lang,
-            group_id: row.group_id,
-            group_name: row.group_name,
-            release: row.release,
-            version: row.version,
-            kind: row.kind,
-            url: row.url,
-            extern_domain: row.extern_domain,
-            added_date: row.added_date || card.addedDate,
-            first_seen: new Date().toISOString(),
-            status:
-              row.kind === 'direct'
-                ? CONFIG.downloadEnabled
-                  ? 'new'
-                  : 'not_downloaded'
-                : 'pending_extern',
-          });
-          if (changed) stats.new_subs++;
-        }
+        const r = await ingestAnime(hiyoriId, card);
+        stats.new_subs += r.added;
         consecErrors = 0; // úspěch → vynulovat řadu chyb
       } catch (e) {
         if (e instanceof RateLimited) {
