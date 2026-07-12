@@ -241,7 +241,36 @@ export function findSubs({ anilist = null, mal = null, episode = null, lang = nu
   return { matchedBy: null, rows: [] };
 }
 
-// availability: souhrn, zda pro anilist/mal (a volitelně episode) máme titulky na R2.
+// "Dnes přidané" pro addon: stažené titulky (na R2) podle first_seen.
+// sinceIso = ISO čas začátku okna. Seskupeno podle anime + epizoda, s jazyky.
+export function recentlyAdded(sinceIso) {
+  const rows = db
+    .prepare(
+      "SELECT anilist_id, mal_id, anime_title, episode, lang, added_date, first_seen " +
+      "FROM subs WHERE status='downloaded' AND r2_key IS NOT NULL AND r2_key<>'' " +
+      "AND first_seen >= ? ORDER BY first_seen DESC"
+    )
+    .all(sinceIso);
+
+  // seskup podle anilist|mal|episode → 1 item s jazyky
+  const map = new Map();
+  for (const r of rows) {
+    const key = `${r.anilist_id || ''}|${r.mal_id || ''}|${r.episode}`;
+    if (!map.has(key)) {
+      map.set(key, {
+        anilist_id: r.anilist_id,
+        mal_id: r.mal_id,
+        anime_title: (r.anime_title || '').replace(/\s*-\s*Hiyori$/i, ''),
+        episode: r.episode,
+        langs: new Set(),
+        added_date: r.added_date,
+        first_seen: r.first_seen, // nejnovější (ORDER BY DESC → první výskyt)
+      });
+    }
+    if (r.lang) map.get(key).langs.add(r.lang);
+  }
+  return [...map.values()].map((it) => ({ ...it, langs: [...it.langs].sort() }));
+}
 // Vrací {matchedBy, total, langs, episodes} — nebo total 0.
 export function subsAvailability({ anilist = null, mal = null, episode = null }) {
   const epCond = episode != null ? ' AND episode=@episode' : '';

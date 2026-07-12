@@ -7,7 +7,7 @@ import { CONFIG } from './config.js';
 import { runOnce, isRunning, ingestAnime } from './scraper/run.js';
 import {
   overviewCounts, recentSubs, recentRuns, getMeta, getSub, findSubs, subsAvailability,
-  listSubs, deleteSub,
+  listSubs, deleteSub, recentlyAdded,
 } from './db.js';
 import { r2PublicUrl, r2Get } from './r2.js';
 import zlib from 'node:zlib';
@@ -85,6 +85,24 @@ app.get('/api/subs/available', (req, res) => {
     langs: a.langs,
     episodes: a.episodes,
   });
+});
+
+// GET /api/recent[?days=N] — dnes přidané stažené titulky (na R2), seskupené.
+// Bez days = dnešní den od půlnoci. Veřejné (pro addon).
+app.get('/api/recent', (req, res) => {
+  const days = req.query.days != null && req.query.days !== ''
+    ? Math.max(1, Number(req.query.days) || 1)
+    : null;
+  let since;
+  if (days) {
+    since = new Date(Date.now() - days * 86400000); // posledních N dní
+  } else {
+    since = new Date();
+    since.setHours(0, 0, 0, 0); // dnešní den od půlnoci (lokální čas serveru)
+  }
+  const sinceIso = since.toISOString();
+  const items = recentlyAdded(sinceIso);
+  res.json({ since: sinceIso, count: items.length, items });
 });
 
 // ==================================================================
