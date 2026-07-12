@@ -69,6 +69,101 @@ export async function ingestAnime(hiyoriId, card = {}, { onlyEpisodes = null } =
   };
 }
 
+// Stahovací fáze — vezme frontu z DB, per-web limit, stáhne + nahraje na R2.
+// Sdílená mezi plným během (runOnce) a ručním "jen stahování" (downloadOnce).
+async function downloadQueue({ log, stats }) {
+  if (!CONFIG.downloadEnabled) {
+    log('Stahování vypnuté (DOWNLOAD_ENABLED != true) — jen evidence.');
+    return;
+  }
+  // vezmi širokou frontu a rozděl per web (direct = hiyori.cz)
+  const candidates = getDownloadCandidates(500);
+  const perHost = new Map();
+  const hostOf = (s) => (s.kind === 'direct' ? 'hiyori.cz' : s.extern_domain || '?');
+  const batch = [];
+
+  for (const s of candidates) {
+    if (CONFIG.maxDownloadsPerRun > 0 && batch.length >= CONFIG.maxDownloadsPerRun) break;
+    if (s.kind === 'extern' && !hasSourceFor(s.extern_domain)) continue;
+    const host = hostOf(s);
+    const used = perHost.get(host) || 0;
+    if (used >= CONFIG.maxDownloadsPerHost) continue;
+    perHost.set(host, used + 1);
+    batch.push(s.sub_id);
+  }
+
+  stats.extern_pending = pendingExternByDomain()
+    .filter((r) => !hasSourceFor(r.extern_domain))
+    .reduce((sum, r) => sum + r.c, 0);
+
+  const perHostSummary = [...perHost.entries()].map(([h, n]) => `${h}:${n}`).join(', ');
+  log(
+    `Ke stažení teď: ${batch.length}` +
+    (perHostSummary ? ` (max ${CONFIG.maxDownloadsPerHost}/web — ${perHostSummary})` : '')
+  );
+
+  for (const subId of batch) {
+    const sub = getSub(subId);
+    if (!sub) continue;
+    try {
+      let res;
+      if (sub.kind === 'direct') {
+        res = await downloadDirect(sub);
+      } else {
+        const ext = await downloadExtern(sub);
+        if (!ext.supported) continue;
+        res = ext;
+      }
+      markDownloaded({
+        sub_id: subId,
+        filename: res.filename,
+        local_path: res.local_path,
+        file_bytes: res.file_bytes,
+        r2_key: res.r2_key ?? null,
+      });
+      stats.downloaded++;
+    } catch (e) {
+      if (e instanceof RateLimited) {
+        log('  ⛔ ' + e.message + ' — utínám stahování.');
+        throw e;
+      }
+      markFailed(subId, e.message);
+      stats.failed++;
+      log(`  ✗ stažení sub ${subId}: ${e.message}`);
+    }
+    await throttle();
+  }
+}
+
+// Ruční "jen stahování" — dočistí frontu z DB, ŽÁDNÝ dotaz na hiyori feed.
+export async function downloadOnce({ log = console.log } = {}) {
+  if (running) {
+    log('Už běží, přeskočeno.');
+    return { skipped: true };
+  }
+  running = true;
+  const runId = startRun();
+  const stats = {
+    feed_cards: 0, anime_checked: 0, new_subs: 0,
+    downloaded: 0, extern_pending: 0, failed: 0,
+  };
+  let ok = 0;
+  let errMsg = null;
+  try {
+    log('Ruční stahování z fronty (bez fetche na hiyori).');
+    await downloadQueue({ log, stats });
+    ok = 1;
+    log(`Hotovo (jen stahování): staženo=${stats.downloaded}, chyby=${stats.failed}`);
+  } catch (e) {
+    errMsg = e.message;
+    log('CHYBA stahování: ' + e.message);
+  } finally {
+    finishRun({ id: runId, ok, error: errMsg, ...stats });
+    running = false;
+  }
+  return { ok: !!ok, ...stats, error: errMsg };
+}
+
 export async function runOnce({ log = console.log } = {}) {
   if (running) {
     log('Scrape už běží, přeskočeno.');
@@ -134,71 +229,8 @@ export async function runOnce({ log = console.log } = {}) {
       await throttle();
     }
 
-    // 5) stahování — fronta z DB (i nedostažené z minulých běhů), limit za běh
-    if (!CONFIG.downloadEnabled) {
-      log('Stahování vypnuté (DOWNLOAD_ENABLED != true) — jen evidence.');
-    }
-    let batch = [];
-    if (CONFIG.downloadEnabled) {
-      // vezmi širokou frontu a rozděl per web (direct = hiyori.cz)
-      const candidates = getDownloadCandidates(500);
-      const perHost = new Map(); // host -> počet už zařazených
-      const hostOf = (s) => (s.kind === 'direct' ? 'hiyori.cz' : s.extern_domain || '?');
-
-      for (const s of candidates) {
-        // celkový strop (0 = bez stropu)
-        if (CONFIG.maxDownloadsPerRun > 0 && batch.length >= CONFIG.maxDownloadsPerRun) break;
-        // jen zdroje, které umíme stáhnout
-        if (s.kind === 'extern' && !hasSourceFor(s.extern_domain)) continue;
-        const host = hostOf(s);
-        const used = perHost.get(host) || 0;
-        if (used >= CONFIG.maxDownloadsPerHost) continue; // z tohoto webu už dost
-        perHost.set(host, used + 1);
-        batch.push(s.sub_id);
-      }
-
-      // kolik extern titulků čeká na dosud nenapsaný parser (jen pro přehled)
-      stats.extern_pending = pendingExternByDomain()
-        .filter((r) => !hasSourceFor(r.extern_domain))
-        .reduce((sum, r) => sum + r.c, 0);
-
-      const perHostSummary = [...perHost.entries()].map(([h, n]) => `${h}:${n}`).join(', ');
-      log(
-        `Ke stažení teď: ${batch.length}` +
-        (perHostSummary ? ` (max ${CONFIG.maxDownloadsPerHost}/web — ${perHostSummary})` : '')
-      );
-    }
-    for (const subId of batch) {
-      const sub = getSub(subId);
-      if (!sub) continue;
-      try {
-        let res;
-        if (sub.kind === 'direct') {
-          res = await downloadDirect(sub);
-        } else {
-          const ext = await downloadExtern(sub);
-          if (!ext.supported) continue; // parser pro tuto doménu ještě není
-          res = ext;
-        }
-        markDownloaded({
-          sub_id: subId,
-          filename: res.filename,
-          local_path: res.local_path,
-          file_bytes: res.file_bytes,
-          r2_key: res.r2_key ?? null,
-        });
-        stats.downloaded++;
-      } catch (e) {
-        if (e instanceof RateLimited) {
-          log('  ⛔ ' + e.message + ' — utínám stahování.');
-          throw e;
-        }
-        markFailed(subId, e.message);
-        stats.failed++;
-        log(`  ✗ stažení sub ${subId}: ${e.message}`);
-      }
-      await throttle();
-    }
+    // 5) stahování — sdílená fronta z DB (i nedostažené z minulých běhů)
+    await downloadQueue({ log, stats });
 
     setMeta('last_run_iso', new Date().toISOString());
     ok = 1;
