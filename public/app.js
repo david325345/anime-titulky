@@ -31,6 +31,7 @@ function renderStats(c, status) {
     `<span class="dot ${dotCls}"></span>` +
     (status.running ? 'scrapuji…' : `poslední běh: ${fmtDate(status.lastRun)}`);
   $('#runBtn').disabled = status.running;
+  $('#dlBtn').disabled = status.running;
 }
 
 function renderSubs(subs) {
@@ -113,6 +114,12 @@ function load() { loadOverview(); loadSubs(); }
 $('#runBtn').addEventListener('click', async () => {
   $('#runBtn').disabled = true;
   await fetch('/api/run', { method: 'POST' });
+  setTimeout(load, 800);
+});
+
+$('#dlBtn').addEventListener('click', async () => {
+  $('#dlBtn').disabled = true;
+  await fetch('/api/download-only', { method: 'POST' });
   setTimeout(load, 800);
 });
 
