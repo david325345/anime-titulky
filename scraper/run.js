@@ -116,19 +116,32 @@ export async function runOnce({ log = console.log } = {}) {
     }
     let batch = [];
     if (CONFIG.downloadEnabled) {
-      const candidates = getDownloadCandidates(CONFIG.maxDownloadsPerRun * 6);
+      // vezmi širokou frontu a rozděl per web (direct = hiyori.cz)
+      const candidates = getDownloadCandidates(500);
+      const perHost = new Map(); // host -> počet už zařazených
+      const hostOf = (s) => (s.kind === 'direct' ? 'hiyori.cz' : s.extern_domain || '?');
+
       for (const s of candidates) {
-        if (batch.length >= CONFIG.maxDownloadsPerRun) break;
-        if (s.kind === 'direct') batch.push(s.sub_id);
-        else if (s.kind === 'extern' && hasSourceFor(s.extern_domain)) batch.push(s.sub_id);
+        // celkový strop (0 = bez stropu)
+        if (CONFIG.maxDownloadsPerRun > 0 && batch.length >= CONFIG.maxDownloadsPerRun) break;
+        // jen zdroje, které umíme stáhnout
+        if (s.kind === 'extern' && !hasSourceFor(s.extern_domain)) continue;
+        const host = hostOf(s);
+        const used = perHost.get(host) || 0;
+        if (used >= CONFIG.maxDownloadsPerHost) continue; // z tohoto webu už dost
+        perHost.set(host, used + 1);
+        batch.push(s.sub_id);
       }
+
       // kolik extern titulků čeká na dosud nenapsaný parser (jen pro přehled)
       stats.extern_pending = pendingExternByDomain()
         .filter((r) => !hasSourceFor(r.extern_domain))
         .reduce((sum, r) => sum + r.c, 0);
+
+      const perHostSummary = [...perHost.entries()].map(([h, n]) => `${h}:${n}`).join(', ');
       log(
         `Ke stažení teď: ${batch.length}` +
-        (candidates.length > batch.length ? ` (limit ${CONFIG.maxDownloadsPerRun}/běh, ve frontě víc)` : '')
+        (perHostSummary ? ` (max ${CONFIG.maxDownloadsPerHost}/web — ${perHostSummary})` : '')
       );
     }
     for (const subId of batch) {
