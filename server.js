@@ -78,12 +78,14 @@ app.get('/api/subs/available', (req, res) => {
   }
   const a = subsAvailability({ anilist, mal, episode });
   res.json({
-    available: a.total > 0,
+    available: a.subs_total > 0,
     matched_by: a.matchedBy,
-    episode,
-    total: a.total,
-    langs: a.langs,
-    episodes: a.episodes,
+    anime_title: a.anime_title,
+    episode, // který díl se ptal (null = celé anime)
+    episodes_count: a.episodes_count, // kolik různých dílů
+    subs_total: a.subs_total,         // kolik titulků celkem (vč. variant)
+    langs: a.langs,                   // souhrn jazyků
+    episodes: a.episodes,             // [{episode, subs:[{lang,group,release}]}]
   });
 });
 

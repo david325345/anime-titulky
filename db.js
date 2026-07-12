@@ -242,7 +242,7 @@ export function findSubs({ anilist = null, mal = null, episode = null, lang = nu
 }
 
 // "Dnes přidané" pro addon: stažené titulky (na R2) podle first_seen.
-// sinceIso = ISO čas začátku okna. Seskupeno podle anime + epizoda, s jazyky.
+// Seskupeno PO ANIME. Každé anime má episodes[] = [{episode, langs[]}], řazeno.
 export function recentlyAdded(sinceIso) {
   const rows = db
     .prepare(
@@ -252,26 +252,35 @@ export function recentlyAdded(sinceIso) {
     )
     .all(sinceIso);
 
-  // seskup podle anilist|mal|episode → 1 item s jazyky
-  const map = new Map();
+  // seskup podle anime (anilist|mal), uvnitř podle epizody s jazyky
+  const anime = new Map();
   for (const r of rows) {
-    const key = `${r.anilist_id || ''}|${r.mal_id || ''}|${r.episode}`;
-    if (!map.has(key)) {
-      map.set(key, {
+    const key = `${r.anilist_id || ''}|${r.mal_id || ''}`;
+    if (!anime.has(key)) {
+      anime.set(key, {
         anilist_id: r.anilist_id,
         mal_id: r.mal_id,
         anime_title: (r.anime_title || '').replace(/\s*-\s*Hiyori$/i, ''),
-        episode: r.episode,
-        langs: new Set(),
-        added_date: r.added_date,
-        first_seen: r.first_seen, // nejnovější (ORDER BY DESC → první výskyt)
+        latest_first_seen: r.first_seen, // ORDER BY DESC → první výskyt = nejnovější
+        _eps: new Map(), // episode -> Set(langs)
       });
     }
-    if (r.lang) map.get(key).langs.add(r.lang);
+    const a = anime.get(key);
+    if (!a._eps.has(r.episode)) a._eps.set(r.episode, new Set());
+    if (r.lang) a._eps.get(r.episode).add(r.lang);
   }
-  return [...map.values()].map((it) => ({ ...it, langs: [...it.langs].sort() }));
+
+  // finalizace: episodes jako seřazené pole objektů {episode, langs}
+  return [...anime.values()].map((a) => {
+    const episodes = [...a._eps.entries()]
+      .map(([episode, langs]) => ({ episode, langs: [...langs].sort() }))
+      .sort((x, y) => x.episode - y.episode);
+    const { _eps, ...rest } = a;
+    return { ...rest, episodes };
+  });
 }
-// Vrací {matchedBy, total, langs, episodes} — nebo total 0.
+// Přehled dostupnosti pro addon. episodes = pole objektů s rozpadem variant.
+// Vrací {matchedBy, anime_title, episodes_count, subs_total, langs, episodes} — nebo total 0.
 export function subsAvailability({ anilist = null, mal = null, episode = null }) {
   const epCond = episode != null ? ' AND episode=@episode' : '';
   const base =
@@ -279,14 +288,38 @@ export function subsAvailability({ anilist = null, mal = null, episode = null })
 
   const summarize = (idCol, id) => {
     const rows = db
-      .prepare(`SELECT episode, lang ${base} AND ${idCol}=@id${epCond}`)
+      .prepare(
+        `SELECT episode, lang, group_name, release, anime_title ${base} AND ${idCol}=@id${epCond} ` +
+        'ORDER BY episode, lang, group_name'
+      )
       .all({ id, episode });
     if (!rows.length) return null;
+
+    const anime_title = (rows[0].anime_title || '').replace(/\s*-\s*Hiyori$/i, '');
     const langs = [...new Set(rows.map((r) => r.lang).filter(Boolean))].sort();
-    const episodes = [
-      ...new Set(rows.map((r) => r.episode).filter((e) => e != null)),
-    ].sort((a, b) => a - b);
-    return { total: rows.length, langs, episodes };
+
+    // seskup podle epizody → varianty {lang, group, release}
+    const epMap = new Map();
+    for (const r of rows) {
+      if (r.episode == null) continue;
+      if (!epMap.has(r.episode)) epMap.set(r.episode, []);
+      epMap.get(r.episode).push({
+        lang: r.lang,
+        group: r.group_name,
+        release: r.release,
+      });
+    }
+    const episodes = [...epMap.entries()]
+      .map(([ep, subs]) => ({ episode: ep, subs }))
+      .sort((a, b) => a.episode - b.episode);
+
+    return {
+      anime_title,
+      episodes_count: episodes.length, // kolik různých dílů
+      subs_total: rows.length,         // kolik titulků celkem (vč. variant)
+      langs,
+      episodes,
+    };
   };
 
   if (anilist) {
@@ -297,5 +330,8 @@ export function subsAvailability({ anilist = null, mal = null, episode = null })
     const s = summarize('mal_id', mal);
     if (s) return { matchedBy: 'mal', ...s };
   }
-  return { matchedBy: null, total: 0, langs: [], episodes: [] };
+  return {
+    matchedBy: null, anime_title: null,
+    episodes_count: 0, subs_total: 0, langs: [], episodes: [],
+  };
 }
