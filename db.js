@@ -135,6 +135,13 @@ export const markFailed = (sub_id, error) =>
 
 export const getSub = (id) => db.prepare('SELECT * FROM subs WHERE sub_id=?').get(id);
 
+// doplní release jen když je prázdný (nepřepisuje hodnotu z hiyori)
+const _setReleaseIfEmpty = db.prepare(
+  "UPDATE subs SET release=@release WHERE sub_id=@sub_id AND (release IS NULL OR release='')"
+);
+export const setReleaseIfEmpty = (sub_id, release) =>
+  _setReleaseIfEmpty.run({ sub_id, release });
+
 // --- runs ---
 const _startRun = db.prepare(
   'INSERT INTO runs(started_at,ok) VALUES(?,0)'
