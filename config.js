@@ -34,8 +34,11 @@ export const CONFIG = {
   // strop na počet detailů (anime) za jeden běh — ochrana proti hammrování
   maxDetailsPerRun: Number(process.env.MAX_DETAILS_PER_RUN || 80),
 
-  // strop na počet STAŽENÝCH titulků za jeden běh (zbytek počká na příště)
-  maxDownloadsPerRun: Number(process.env.MAX_DOWNLOADS_PER_RUN || 5),
+  // limit stažených titulků z JEDNOHO webu za běh (per-doména)
+  maxDownloadsPerHost: Number(process.env.MAX_DOWNLOADS_PER_HOST || 2),
+
+  // volitelný celkový strop za běh napříč všemi weby (0 = bez stropu)
+  maxDownloadsPerRun: Number(process.env.MAX_DOWNLOADS_PER_RUN || 0),
 
   // min. rozestup (ms) mezi requesty na TÝŽ web (per-doména brzda proti banu)
   perHostDelayMs: Number(process.env.PER_HOST_DELAY_MS || 4000),
