@@ -72,6 +72,19 @@ tbody tr:hover { background: #1f2833; }
 .src-extern { background: rgba(210,153,34,.16); color: #f0c674; }
 .r2-yes { background: rgba(46,160,67,.16); color: #6ee787; cursor: help; }
 .r2-no { color: var(--muted); }
+
+.addbox { margin-bottom: 22px; }
+.addrow { display: flex; gap: 10px; }
+.addrow input {
+  flex: 1; padding: 10px 12px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--bg2); color: var(--fg);
+  font-size: 14px;
+}
+.addrow input:focus { outline: none; border-color: #6ee787; }
+.addrow button { white-space: nowrap; }
+.addmsg { margin-top: 10px; font-size: 13px; min-height: 18px; }
+.addmsg.ok { color: #6ee787; }
+.addmsg.err { color: #ff7b72; }
 .st-downloaded { color: #6ee787; }
 .st-new { color: var(--muted); }
 .st-not_downloaded { color: var(--muted); }

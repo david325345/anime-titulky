@@ -94,5 +94,34 @@ $('#runBtn').addEventListener('click', async () => {
   setTimeout(load, 800);
 });
 
+async function addAnime() {
+  const url = $('#addUrl').value.trim();
+  const msg = $('#addMsg');
+  if (!url) { msg.textContent = 'Vlož odkaz na anime z hiyori.'; return; }
+  $('#addBtn').disabled = true;
+  msg.className = 'addmsg muted';
+  msg.textContent = 'Načítám…';
+  try {
+    const r = await (await fetch('/api/add-anime?url=' + encodeURIComponent(url))).json();
+    if (r.error) {
+      msg.className = 'addmsg err';
+      msg.textContent = '⚠ ' + r.error;
+    } else {
+      msg.className = 'addmsg ok';
+      const dl = r.download_enabled ? 'zařazeno do fronty' : 'evidováno (stahování vypnuté)';
+      msg.textContent = `✅ ${r.title || 'anime'} — nalezeno ${r.found} titulků, nových ${r.added}, ${dl}.`;
+      $('#addUrl').value = '';
+      load();
+    }
+  } catch (e) {
+    msg.className = 'addmsg err';
+    msg.textContent = '⚠ Chyba: ' + e.message;
+  } finally {
+    $('#addBtn').disabled = false;
+  }
+}
+$('#addBtn').addEventListener('click', addAnime);
+$('#addUrl').addEventListener('keydown', (e) => { if (e.key === 'Enter') addAnime(); });
+
 load();
 setInterval(load, 5000); // auto-refresh
