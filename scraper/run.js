@@ -15,8 +15,10 @@ let running = false;
 export const isRunning = () => running;
 
 // Naparsuje jedno anime z hiyori (detail) a uloží jeho titulky do DB.
-// Vrací { found, added, title, anilistId, malId }. Používá běh i ruční přidání z UI.
-export async function ingestAnime(hiyoriId, card = {}) {
+// onlyEpisodes = Set čísel epizod → uloží jen ty díly (automatický scrape z feedu).
+// onlyEpisodes = null/prázdné → uloží celou tabulku (ruční přidání přes URL).
+// Vrací { found, added, title, anilistId, malId }.
+export async function ingestAnime(hiyoriId, card = {}, { onlyEpisodes = null } = {}) {
   const detail = await getDetail(hiyoriId);
   upsertAnime({
     hiyori_id: hiyoriId,
@@ -26,8 +28,14 @@ export async function ingestAnime(hiyoriId, card = {}) {
     type: detail.type,
   });
 
+  // filtr na přidané epizody (jen u automatického scrape)
+  const useFilter = onlyEpisodes && onlyEpisodes.size > 0;
+  const rows = useFilter
+    ? detail.rows.filter((r) => r.episode != null && onlyEpisodes.has(r.episode))
+    : detail.rows;
+
   let added = 0;
-  for (const row of detail.rows) {
+  for (const row of rows) {
     const changed = insertSub({
       sub_id: row.sub_id,
       hiyori_id: hiyoriId,
@@ -53,7 +61,7 @@ export async function ingestAnime(hiyoriId, card = {}) {
     if (changed) added++;
   }
   return {
-    found: detail.rows.length,
+    found: rows.length,
     added,
     title: detail.title,
     anilistId: detail.anilist_id,
@@ -92,19 +100,22 @@ export async function runOnce({ log = console.log } = {}) {
     }
     const fresh = feed.filter((c) => !cutoff || !c.addedAt || c.addedAt >= cutoff);
 
-    // 3) distinct hiyori_id (zachovej metadata z karty pro title/lang)
-    const byId = new Map();
-    for (const c of fresh) if (!byId.has(c.hiyoriId)) byId.set(c.hiyoriId, c);
+    // 3) seskup podle hiyori_id — posbírej VŠECHNY přidané epizody (anime může být ve feedu víckrát)
+    const byId = new Map(); // hiyoriId -> { card, episodes:Set }
+    for (const c of fresh) {
+      if (!byId.has(c.hiyoriId)) byId.set(c.hiyoriId, { card: c, episodes: new Set() });
+      if (c.episode != null) byId.get(c.hiyoriId).episodes.add(c.episode);
+    }
     let ids = [...byId.keys()].slice(0, CONFIG.maxDetailsPerRun);
     log(`Ke kontrole: ${ids.length} anime (z ${byId.size} čerstvých)`);
 
-    // 4) detaily
+    // 4) detaily — z detailu vezmi jen přidané epizody (dané feedem)
     let consecErrors = 0;
     for (const hiyoriId of ids) {
       stats.anime_checked++;
-      const card = byId.get(hiyoriId);
+      const { card, episodes } = byId.get(hiyoriId);
       try {
-        const r = await ingestAnime(hiyoriId, card);
+        const r = await ingestAnime(hiyoriId, card, { onlyEpisodes: episodes });
         stats.new_subs += r.added;
         consecErrors = 0; // úspěch → vynulovat řadu chyb
       } catch (e) {
