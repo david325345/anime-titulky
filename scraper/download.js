@@ -6,6 +6,19 @@ import zlib from 'node:zlib';
 import { getBinary } from './http.js';
 import { CONFIG } from '../config.js';
 import { r2Enabled, r2Put, r2PublicUrl } from '../r2.js';
+import { setReleaseIfEmpty } from '../db.js';
+
+// skupina z první [..] závorky názvu (odmítne kvalitu/tech značky jako [1080p])
+function groupFromName(name) {
+  const m = (name || '').match(/\[([^\]]+)\]/);
+  if (!m) return null;
+  const g = m[1].trim();
+  if (!g) return null;
+  if (/^\d{3,4}p$|^(x264|x265|h264|h265|hevc|avc|web|webrip|web-dl|bd|blu|1080|720|480|aac|flac|opus|multi|dual|10bit)/i.test(g)) {
+    return null;
+  }
+  return g;
+}
 
 // název z Content-Disposition: filename="..." (příp. filename*=UTF-8''...)
 function filenameFromCD(cd, fallback) {
@@ -65,6 +78,12 @@ export async function saveSubFile(sub, buf, rawName) {
     fs.mkdirSync(dir, { recursive: true });
     local_path = path.join(dir, outName);
     fs.writeFileSync(local_path, buf);
+  }
+
+  // release z hiyori chybí → doplň skupinu z názvu souboru (jen skupina)
+  if (!sub.release) {
+    const g = groupFromName(rawName || filename);
+    if (g) setReleaseIfEmpty(sub.sub_id, g);
   }
 
   return { filename: outName, local_path, file_bytes: buf.length, r2_key, r2_url };
