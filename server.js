@@ -4,7 +4,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { CONFIG } from './config.js';
-import { runOnce, isRunning } from './scraper/run.js';
+import { runOnce, isRunning, ingestAnime } from './scraper/run.js';
 import {
   overviewCounts, recentSubs, recentRuns, getMeta, getSub, findSubs, subsAvailability,
 } from './db.js';
@@ -112,6 +112,34 @@ app.post('/api/run', (req, res) => {
   if (isRunning()) return res.json({ started: false, reason: 'už běží' });
   runOnce().catch((e) => console.error('run error', e));
   res.json({ started: true });
+});
+
+// ruční přidání anime z hiyori URL (nebo ID) — naparsuje titulky, zařadí do fronty
+app.get('/api/add-anime', async (req, res) => {
+  const input = String(req.query.url || req.query.id || '').trim();
+  // vytáhni hiyori_id z URL (…/anime/12345) nebo z holého čísla
+  const m = input.match(/\/anime\/(\d+)/) || input.match(/^(\d+)$/);
+  const hiyoriId = m ? Number(m[1]) : null;
+  if (!hiyoriId) {
+    return res.status(400).json({
+      error: 'Zadej odkaz na anime z hiyori (např. https://hiyori.cz/anime/21389) nebo číslo.',
+    });
+  }
+  try {
+    const r = await ingestAnime(hiyoriId);
+    res.json({
+      ok: true,
+      hiyori_id: hiyoriId,
+      title: (r.title || '').replace(/\s*-\s*Hiyori$/i, ''),
+      anilist_id: r.anilistId,
+      mal_id: r.malId,
+      found: r.found,
+      added: r.added,
+      download_enabled: CONFIG.downloadEnabled,
+    });
+  } catch (e) {
+    res.status(500).json({ error: 'Nepodařilo se načíst anime: ' + e.message });
+  }
 });
 
 // stažení konkrétního titulku z UI — rozbalený .ass (z R2 .gz, fallback lokální)
