@@ -170,6 +170,27 @@ export const overviewCounts = () =>
     .get();
 export const recentSubs = (limit = 100) =>
   db.prepare('SELECT * FROM subs ORDER BY first_seen DESC, sub_id DESC LIMIT ?').all(limit);
+
+// stránkovaný výpis s volitelným hledáním podle názvu anime
+export function listSubs({ limit = 100, offset = 0, q = null } = {}) {
+  const where = q ? "WHERE anime_title LIKE @like" : '';
+  const like = q ? `%${q}%` : null;
+  const rows = db
+    .prepare(
+      `SELECT * FROM subs ${where}
+       ORDER BY first_seen DESC, sub_id DESC LIMIT @limit OFFSET @offset`
+    )
+    .all({ limit, offset, like });
+  const total = db
+    .prepare(`SELECT COUNT(*) AS c FROM subs ${where}`)
+    .get({ like }).c;
+  return { rows, total };
+}
+
+// smazání záznamu z DB (soubor na R2 zůstává). Vrací počet smazaných řádků.
+const _deleteSub = db.prepare('DELETE FROM subs WHERE sub_id=?');
+export const deleteSub = (sub_id) => _deleteSub.run(sub_id).changes;
+
 export const recentRuns = (limit = 12) =>
   db.prepare('SELECT * FROM runs ORDER BY id DESC LIMIT ?').all(limit);
 
