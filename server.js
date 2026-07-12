@@ -7,6 +7,7 @@ import { CONFIG } from './config.js';
 import { runOnce, isRunning, ingestAnime } from './scraper/run.js';
 import {
   overviewCounts, recentSubs, recentRuns, getMeta, getSub, findSubs, subsAvailability,
+  listSubs, deleteSub,
 } from './db.js';
 import { r2PublicUrl, r2Get } from './r2.js';
 import zlib from 'node:zlib';
@@ -102,9 +103,29 @@ app.get('/api/overview', (req, res) => {
       intervalMin: CONFIG.intervalMin,
     },
     counts: overviewCounts(),
-    subs: recentSubs(120),
     runs: recentRuns(12),
   });
+});
+
+// stránkovaný výpis titulků s hledáním: /api/subs-list?page=1&q=frieren
+app.get('/api/subs-list', (req, res) => {
+  const perPage = 100;
+  const page = Math.max(1, Number(req.query.page) || 1);
+  const q = req.query.q ? String(req.query.q).trim() : null;
+  const { rows, total } = listSubs({ limit: perPage, offset: (page - 1) * perPage, q });
+  res.json({
+    page,
+    per_page: perPage,
+    total,
+    pages: Math.max(1, Math.ceil(total / perPage)),
+    subs: rows,
+  });
+});
+
+// smazání záznamu (z DB; soubor na R2 zůstává)
+app.delete('/api/sub/:subId', (req, res) => {
+  const n = deleteSub(Number(req.params.subId));
+  res.json({ deleted: n > 0 });
 });
 
 // ruční spuštění scrapu
