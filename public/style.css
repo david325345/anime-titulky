@@ -85,6 +85,24 @@ tbody tr:hover { background: #1f2833; }
 .addmsg { margin-top: 10px; font-size: 13px; min-height: 18px; }
 .addmsg.ok { color: #6ee787; }
 .addmsg.err { color: #ff7b72; }
+
+.panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.panel-head h2 { margin: 0; }
+.search {
+  padding: 8px 12px; border-radius: 8px; min-width: 260px;
+  border: 1px solid var(--border); background: var(--bg2); color: var(--fg); font-size: 14px;
+}
+.search:focus { outline: none; border-color: #6ee787; }
+
+.pager { display: flex; align-items: center; gap: 14px; margin-top: 14px; justify-content: center; }
+.pager button:disabled { opacity: .4; cursor: default; }
+
+button.del {
+  background: transparent; border: 1px solid var(--border); color: #ff7b72;
+  border-radius: 6px; padding: 2px 8px; cursor: pointer; font-size: 13px; line-height: 1;
+}
+button.del:hover { background: rgba(255,123,114,.14); border-color: #ff7b72; }
+button.del:disabled { opacity: .4; cursor: default; }
 .st-downloaded { color: #6ee787; }
 .st-new { color: var(--muted); }
 .st-not_downloaded { color: var(--muted); }

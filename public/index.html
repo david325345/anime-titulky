@@ -28,17 +28,25 @@
     </section>
 
     <section class="panel">
-      <h2>Poslední přidané titulky</h2>
+      <div class="panel-head">
+        <h2>Titulky</h2>
+        <input id="searchInput" class="search" type="text" placeholder="Hledat podle názvu anime…" />
+      </div>
       <div class="table-wrap">
         <table id="subsTable">
           <thead>
             <tr>
               <th>Kdy</th><th>Anime</th><th>Ep</th><th>Jazyk</th>
-              <th>Skupina</th><th>Release</th><th>Zdroj</th><th>Stav</th><th>R2</th><th></th>
+              <th>Skupina</th><th>Release</th><th>Zdroj</th><th>Stav</th><th>R2</th><th></th><th></th>
             </tr>
           </thead>
           <tbody></tbody>
         </table>
+      </div>
+      <div class="pager">
+        <button id="prevBtn">‹ Předchozí</button>
+        <span id="pageInfo" class="muted">—</span>
+        <button id="nextBtn">Další ›</button>
       </div>
     </section>
 

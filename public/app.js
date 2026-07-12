@@ -60,8 +60,9 @@ function renderSubs(subs) {
       <td class="nowrap">${statusCell(s)}</td>
       <td class="nowrap">${onR2}</td>
       <td class="nowrap">${dl}</td>
+      <td class="nowrap"><button class="del" data-id="${s.sub_id}" title="Smazat záznam (na R2 zůstává)">✕</button></td>
     </tr>`;
-  }).join('') || `<tr><td colspan="10" class="muted">Zatím nic. Spusť scrape.</td></tr>`;
+  }).join('') || `<tr><td colspan="11" class="muted">Nic nenalezeno.</td></tr>`;
 }
 
 function renderRuns(runs) {
@@ -79,14 +80,35 @@ function renderRuns(runs) {
     </tr>`).join('') || `<tr><td colspan="9" class="muted">—</td></tr>`;
 }
 
-async function load() {
+let curPage = 1;
+let curQuery = '';
+
+async function loadOverview() {
   try {
     const d = await (await fetch('/api/overview')).json();
     renderStats(d.counts, d.status);
-    renderSubs(d.subs);
     renderRuns(d.runs);
-  } catch (e) { /* ignoruj, zkusíme příště */ }
+  } catch (e) { /* ignoruj */ }
 }
+
+async function loadSubs() {
+  try {
+    const url = `/api/subs-list?page=${curPage}` + (curQuery ? `&q=${encodeURIComponent(curQuery)}` : '');
+    const d = await (await fetch(url)).json();
+    renderSubs(d.subs);
+    renderPager(d);
+  } catch (e) { /* ignoruj */ }
+}
+
+function renderPager(d) {
+  const from = d.total === 0 ? 0 : (d.page - 1) * d.per_page + 1;
+  const to = Math.min(d.page * d.per_page, d.total);
+  $('#pageInfo').textContent = `${from}–${to} z ${d.total}`;
+  $('#prevBtn').disabled = d.page <= 1;
+  $('#nextBtn').disabled = d.page >= d.pages;
+}
+
+function load() { loadOverview(); loadSubs(); }
 
 $('#runBtn').addEventListener('click', async () => {
   $('#runBtn').disabled = true;
@@ -123,5 +145,34 @@ async function addAnime() {
 $('#addBtn').addEventListener('click', addAnime);
 $('#addUrl').addEventListener('keydown', (e) => { if (e.key === 'Enter') addAnime(); });
 
+// stránkování
+$('#prevBtn').addEventListener('click', () => { if (curPage > 1) { curPage--; loadSubs(); } });
+$('#nextBtn').addEventListener('click', () => { curPage++; loadSubs(); });
+
+// hledání podle názvu (debounce)
+let searchTimer = null;
+$('#searchInput').addEventListener('input', (e) => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    curQuery = e.target.value.trim();
+    curPage = 1;
+    loadSubs();
+  }, 350);
+});
+
+// mazání (delegace na tabulce)
+$('#subsTable').addEventListener('click', async (e) => {
+  const btn = e.target.closest('button.del');
+  if (!btn) return;
+  const id = btn.dataset.id;
+  if (!confirm('Smazat tento záznam? (soubor na R2 zůstane)')) return;
+  btn.disabled = true;
+  try {
+    await fetch(`/api/sub/${id}`, { method: 'DELETE' });
+    loadSubs();
+    loadOverview();
+  } catch (e) { btn.disabled = false; }
+});
+
 load();
-setInterval(load, 5000); // auto-refresh
+setInterval(loadOverview, 5000); // auto-refresh jen souhrn (netrhá stránkování/hledání)
