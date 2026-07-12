@@ -142,6 +142,10 @@ const _setReleaseIfEmpty = db.prepare(
 export const setReleaseIfEmpty = (sub_id, release) =>
   _setReleaseIfEmpty.run({ sub_id, release });
 
+// force update release (hns varianty: SubsPlease / BDRip)
+const _setRelease = db.prepare('UPDATE subs SET release=@release WHERE sub_id=@sub_id');
+export const setRelease = (sub_id, release) => _setRelease.run({ sub_id, release });
+
 // --- runs ---
 const _startRun = db.prepare(
   'INSERT INTO runs(started_at,ok) VALUES(?,0)'
