@@ -44,9 +44,15 @@ function renderSubs(subs) {
     const src = s.kind === 'direct'
       ? `<span class="pill src-direct">hiyori</span>`
       : `<span class="pill src-extern">${esc(s.extern_domain || 'extern')}</span>`;
+    const isHanabi = s.extern_domain === 'hanabi.fan';
+    const hanabiBtn = (isHanabi && s.status !== 'downloaded')
+      ? `<button class="hanabi-link" data-id="${s.sub_id}" data-ep="${s.episode ?? ''}" title="Vložit odkaz na ZIP z hanabi (img.hanabi.fan)">🔗 odkaz</button>`
+      : '';
     const dl = s.status === 'downloaded'
       ? `<a href="/api/file/${s.sub_id}">stáhnout</a>`
-      : (s.kind === 'extern' ? `<a href="${esc(s.url)}" target="_blank">otevřít</a>` : '');
+      : (isHanabi
+          ? hanabiBtn
+          : (s.kind === 'extern' ? `<a href="${esc(s.url)}" target="_blank">otevřít</a>` : ''));
     const onR2 = s.r2_key
       ? `<span class="pill r2-yes" title="${esc(s.r2_key)}">✓</span>`
       : `<span class="r2-no">—</span>`;
@@ -169,6 +175,34 @@ $('#searchInput').addEventListener('input', (e) => {
 
 // mazání (delegace na tabulce)
 $('#subsTable').addEventListener('click', async (e) => {
+  // hanabi odkaz — prompt na ZIP URL
+  const hb = e.target.closest('button.hanabi-link');
+  if (hb) {
+    const id = hb.dataset.id;
+    const ep = hb.dataset.ep;
+    const url = prompt(
+      `Vlož odkaz na ZIP titulku z hanabi (díl ${ep || '?'}):\n` +
+      `Zkopíruj z přihlášené stránky hanabi.fan — musí být https://img.hanabi.fan/…/*.zip`
+    );
+    if (!url) return;
+    hb.disabled = true;
+    hb.textContent = 'stahuji…';
+    try {
+      const r = await (await fetch('/api/hanabi-link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sub_id: Number(id), url: url.trim() }),
+      })).json();
+      if (r.error) { alert('Chyba: ' + r.error); hb.disabled = false; hb.textContent = '🔗 odkaz'; }
+      else { loadSubs(); loadOverview(); }
+    } catch (err) {
+      alert('Chyba: ' + err.message);
+      hb.disabled = false; hb.textContent = '🔗 odkaz';
+    }
+    return;
+  }
+
+  // mazání záznamu
   const btn = e.target.closest('button.del');
   if (!btn) return;
   const id = btn.dataset.id;

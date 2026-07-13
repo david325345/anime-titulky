@@ -36,6 +36,8 @@ button {
 button:hover { filter: brightness(1.1); }
 button:disabled { opacity: .5; cursor: default; }
 .btn-secondary { background: var(--panel); border: 1px solid var(--line); color: var(--fg); }
+.hanabi-link { background: #3a2f5c; border: 1px solid #5a4a8c; color: #d0c4ff; padding: 3px 8px; font-size: 12px; font-weight: 500; border-radius: 6px; cursor: pointer; }
+.hanabi-link:hover { filter: brightness(1.2); }
 .muted { color: var(--muted); }
 
 main { padding: 22px; max-width: 1200px; margin: 0 auto; }
