@@ -10,6 +10,8 @@ import {
   listSubs, deleteSub, recentlyAdded, markDownloaded,
 } from './db.js';
 import * as hanabi from './scraper/sources/hanabi.js';
+import { saveSubFile } from './scraper/download.js';
+import AdmZip from 'adm-zip';
 import { r2PublicUrl, r2Get } from './r2.js';
 import zlib from 'node:zlib';
 
@@ -232,7 +234,55 @@ app.post('/api/hanabi-link', express.json(), async (req, res) => {
   }
 });
 
-// stažení konkrétního titulku z UI — rozbalený .ass (z R2 .gz, fallback lokální)
+// ruční nahrání titulku k existujícímu záznamu (.ass/.srt/.ssa/.zip)
+// soubor jde jako raw binary body, sub_id a filename v query
+app.post('/api/upload-sub',
+  express.raw({ type: '*/*', limit: '5mb' }),
+  async (req, res) => {
+    const subId = Number(req.query.sub_id);
+    const rawName = String(req.query.filename || 'titulky').trim();
+    if (!subId) return res.status(400).json({ error: 'Chybí sub_id.' });
+    if (!req.body || !req.body.length) return res.status(400).json({ error: 'Prázdný soubor.' });
+
+    const sub = getSub(subId);
+    if (!sub) return res.status(404).json({ error: 'Záznam nenalezen.' });
+
+    const ext = (rawName.match(/\.([a-z0-9]+)$/i)?.[1] || '').toLowerCase();
+    if (!['ass', 'srt', 'ssa', 'zip'].includes(ext)) {
+      return res.status(400).json({ error: 'Povolené: .ass, .srt, .ssa, .zip' });
+    }
+
+    try {
+      let buf = req.body;
+      let name = rawName;
+
+      // ZIP → vytáhni první titulek
+      if (ext === 'zip') {
+        const zip = new AdmZip(buf);
+        const entry =
+          zip.getEntries().find((e) => /\.ass$/i.test(e.entryName) && !e.isDirectory) ||
+          zip.getEntries().find((e) => /\.(srt|ssa)$/i.test(e.entryName) && !e.isDirectory);
+        if (!entry) return res.status(400).json({ error: 'V ZIPu není .ass/.srt titulek.' });
+        buf = entry.getData();
+        name = entry.entryName.split('/').pop();
+      }
+
+      // skupina z názvu, když v DB chybí
+      const grp = sub.group_name || (name.match(/\[([^\]]+)\]/)?.[1]?.trim() ?? null);
+      const saved = await saveSubFile({ ...sub, group_name: grp }, buf, name);
+
+      markDownloaded({
+        sub_id: subId,
+        filename: saved.filename,
+        local_path: saved.local_path,
+        file_bytes: saved.file_bytes,
+        r2_key: saved.r2_key ?? null,
+      });
+      res.json({ ok: true, sub_id: subId, filename: saved.filename, file_bytes: saved.file_bytes });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
 app.get('/api/file/:subId', async (req, res) => {
   const sub = getSub(Number(req.params.subId));
   if (!sub) return res.status(404).send('Titulek nenalezen.');
