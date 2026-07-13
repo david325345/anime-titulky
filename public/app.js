@@ -53,6 +53,10 @@ function renderSubs(subs) {
       : (isHanabi
           ? hanabiBtn
           : (s.kind === 'extern' ? `<a href="${esc(s.url)}" target="_blank">otevřít</a>` : ''));
+    // ruční nahrání titulku (jen u nestažených)
+    const uploadBtn = s.status !== 'downloaded'
+      ? `<button class="upload-sub" data-id="${s.sub_id}" title="Nahrát titulek ručně (.ass/.srt/.zip)">📤</button>`
+      : '';
     const onR2 = s.r2_key
       ? `<span class="pill r2-yes" title="${esc(s.r2_key)}">✓</span>`
       : `<span class="r2-no">—</span>`;
@@ -67,7 +71,7 @@ function renderSubs(subs) {
       <td class="nowrap">${statusCell(s)}</td>
       <td class="nowrap">${onR2}</td>
       <td class="nowrap">${dl}</td>
-      <td class="nowrap"><button class="del" data-id="${s.sub_id}" title="Smazat záznam (na R2 zůstává)">✕</button></td>
+      <td class="nowrap">${uploadBtn}<button class="del" data-id="${s.sub_id}" title="Smazat záznam (na R2 zůstává)">✕</button></td>
     </tr>`;
   }).join('') || `<tr><td colspan="11" class="muted">Nic nenalezeno.</td></tr>`;
 }
@@ -175,6 +179,43 @@ $('#searchInput').addEventListener('input', (e) => {
 
 // mazání (delegace na tabulce)
 $('#subsTable').addEventListener('click', async (e) => {
+  // ruční nahrání titulku — otevři file dialog
+  const up = e.target.closest('button.upload-sub');
+  if (up) {
+    const id = up.dataset.id;
+    let input = document.getElementById('hiddenFileInput');
+    if (!input) {
+      input = document.createElement('input');
+      input.type = 'file';
+      input.id = 'hiddenFileInput';
+      input.accept = '.ass,.srt,.ssa,.zip';
+      input.style.display = 'none';
+      document.body.appendChild(input);
+    }
+    input.onchange = async () => {
+      const file = input.files[0];
+      if (!file) return;
+      up.disabled = true;
+      const orig = up.textContent;
+      up.textContent = '⏳';
+      try {
+        const buf = await file.arrayBuffer();
+        const r = await (await fetch(
+          `/api/upload-sub?sub_id=${id}&filename=${encodeURIComponent(file.name)}`,
+          { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: buf }
+        )).json();
+        if (r.error) { alert('Chyba: ' + r.error); up.disabled = false; up.textContent = orig; }
+        else { loadSubs(); loadOverview(); }
+      } catch (err) {
+        alert('Chyba: ' + err.message);
+        up.disabled = false; up.textContent = orig;
+      }
+      input.value = '';
+    };
+    input.click();
+    return;
+  }
+
   // hanabi odkaz — prompt na ZIP URL
   const hb = e.target.closest('button.hanabi-link');
   if (hb) {
