@@ -7,8 +7,9 @@ import { CONFIG } from './config.js';
 import { runOnce, downloadOnce, isRunning, ingestAnime } from './scraper/run.js';
 import {
   overviewCounts, recentSubs, recentRuns, getMeta, getSub, findSubs, subsAvailability,
-  listSubs, deleteSub, recentlyAdded,
+  listSubs, deleteSub, recentlyAdded, markDownloaded,
 } from './db.js';
+import * as hanabi from './scraper/sources/hanabi.js';
 import { r2PublicUrl, r2Get } from './r2.js';
 import zlib from 'node:zlib';
 
@@ -200,6 +201,34 @@ app.get('/api/add-anime', async (req, res) => {
     });
   } catch (e) {
     res.status(500).json({ error: 'Nepodařilo se načíst anime: ' + e.message });
+  }
+});
+
+// ruční vložení hanabi ZIP odkazu → server stáhne z CDN, rozbalí .ass, na R2
+app.post('/api/hanabi-link', express.json(), async (req, res) => {
+  const subId = Number(req.body?.sub_id);
+  const url = String(req.body?.url || '').trim();
+  if (!subId || !url) {
+    return res.status(400).json({ error: 'Chybí sub_id nebo url.' });
+  }
+  if (!hanabi.isValidHanabiUrl(url)) {
+    return res.status(400).json({ error: 'Odkaz musí být https://img.hanabi.fan/…/*.zip' });
+  }
+  const sub = getSub(subId);
+  if (!sub) return res.status(404).json({ error: 'Titulek nenalezen.' });
+
+  try {
+    const saved = await hanabi.downloadFromUrl(sub, url);
+    markDownloaded({
+      sub_id: subId,
+      filename: saved.filename,
+      local_path: saved.local_path,
+      file_bytes: saved.file_bytes,
+      r2_key: saved.r2_key ?? null,
+    });
+    res.json({ ok: true, sub_id: subId, filename: saved.filename, file_bytes: saved.file_bytes });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
