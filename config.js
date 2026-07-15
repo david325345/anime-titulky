@@ -67,9 +67,12 @@ export const CONFIG = {
 
   // Basic Auth na dashboard + admin (addon endpointy zůstávají veřejné).
   // Když AUTH_USER/AUTH_PASS chybí, dashboard není chráněný.
+  // AUTH_USER2/AUTH_PASS2 je volitelný druhý účet se stejnými právy.
   auth: {
     user: process.env.AUTH_USER || '',
     pass: process.env.AUTH_PASS || '',
+    user2: process.env.AUTH_USER2 || '',
+    pass2: process.env.AUTH_PASS2 || '',
   },
 };
 
