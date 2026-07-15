@@ -241,6 +241,55 @@ export function findSubs({ anilist = null, mal = null, episode = null, lang = nu
   return { matchedBy: null, rows: [] };
 }
 
+// Kompletní výpis všeho, co máme stažené na R2. Seskupeno po anime → epizody → titulky.
+// Vrací syrové řádky seskupené; gz_url dopočítá server (zná R2_PUBLIC_BASE).
+export function allSubs() {
+  const rows = db
+    .prepare(
+      "SELECT sub_id, hiyori_id, anilist_id, mal_id, anime_title, episode, lang, " +
+      "group_name, release, version, kind, extern_domain, r2_key " +
+      "FROM subs WHERE status='downloaded' AND r2_key IS NOT NULL AND r2_key<>'' " +
+      "ORDER BY anime_title, episode, lang, group_name"
+    )
+    .all();
+
+  // anime (anilist|mal|hiyori) → epizoda → titulky
+  const anime = new Map();
+  for (const r of rows) {
+    const key = `${r.anilist_id || ''}|${r.mal_id || ''}|${r.hiyori_id || ''}`;
+    if (!anime.has(key)) {
+      anime.set(key, {
+        hiyori_id: r.hiyori_id,
+        anilist_id: r.anilist_id,
+        mal_id: r.mal_id,
+        anime_title: (r.anime_title || '').replace(/\s*-\s*Hiyori$/i, ''),
+        _eps: new Map(), // episode -> subs[]
+      });
+    }
+    const a = anime.get(key);
+    if (!a._eps.has(r.episode)) a._eps.set(r.episode, []);
+    a._eps.get(r.episode).push({
+      sub_id: r.sub_id,
+      lang: r.lang,
+      group: r.group_name,
+      release: r.release,
+      version: r.version,
+      source: r.extern_domain || 'hiyori',
+      r2_key: r.r2_key, // server z něj udělá gz_url
+    });
+  }
+
+  const items = [...anime.values()].map((a) => {
+    const episodes = [...a._eps.entries()]
+      .map(([episode, subs]) => ({ episode, subs }))
+      .sort((x, y) => x.episode - y.episode);
+    const { _eps, ...rest } = a;
+    return { ...rest, episodes };
+  });
+
+  return { items, subsTotal: rows.length };
+}
+
 // "Dnes přidané" pro addon: stažené titulky (na R2) podle first_seen.
 // Seskupeno PO ANIME. Každé anime má episodes[] = [{episode, langs[]}], řazeno.
 export function recentlyAdded(sinceIso) {
