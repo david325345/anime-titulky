@@ -7,7 +7,7 @@ import { CONFIG } from './config.js';
 import { runOnce, downloadOnce, isRunning, ingestAnime } from './scraper/run.js';
 import {
   overviewCounts, recentSubs, recentRuns, getMeta, getSub, findSubs, subsAvailability,
-  listSubs, deleteSub, recentlyAdded, markDownloaded,
+  listSubs, deleteSub, recentlyAdded, markDownloaded, allSubs,
 } from './db.js';
 import * as hanabi from './scraper/sources/hanabi.js';
 import { saveSubFile } from './scraper/download.js';
@@ -108,6 +108,22 @@ app.get('/api/recent', (req, res) => {
   const sinceIso = since.toISOString();
   const items = recentlyAdded(sinceIso);
   res.json({ since: sinceIso, count: items.length, items });
+});
+
+// GET /api/all — kompletní výpis všeho staženého na R2, seskupené po anime.
+// Bez stránkování. Pro zálohu / import do jiného nástroje / přehled.
+app.get('/api/all', (req, res) => {
+  const { items, subsTotal } = allSubs();
+  // dopočítej veřejný R2 odkaz, r2_key ven neposíláme (duplikoval by gz_url)
+  for (const a of items) {
+    for (const ep of a.episodes) {
+      for (const s of ep.subs) {
+        s.gz_url = r2PublicUrl(s.r2_key);
+        delete s.r2_key;
+      }
+    }
+  }
+  res.json({ count: items.length, subs_total: subsTotal, items });
 });
 
 // ==================================================================
