@@ -19,13 +19,15 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 
 // --- Basic Auth (dashboard + admin). Když AUTH_USER/AUTH_PASS chybí, nechrání se. ---
+// Volitelný druhý účet: AUTH_USER2/AUTH_PASS2 (stejná práva).
 function basicAuth(req, res, next) {
-  const { user, pass } = CONFIG.auth;
+  const { user, pass, user2, pass2 } = CONFIG.auth;
   if (!user || !pass) return next(); // nenastaveno → veřejné (viz upozornění v logu)
   const m = (req.headers.authorization || '').match(/^Basic (.+)$/i);
   if (m) {
     const [u, p] = Buffer.from(m[1], 'base64').toString('utf8').split(':');
     if (u === user && p === pass) return next();
+    if (user2 && pass2 && u === user2 && p === pass2) return next();
   }
   res.set('WWW-Authenticate', 'Basic realm="NimeToDex Titulky"');
   return res.status(401).send('Přihlášení vyžadováno.');
@@ -334,7 +336,10 @@ app.listen(CONFIG.port, () => {
   if (!CONFIG.auth.user || !CONFIG.auth.pass) {
     console.log('⚠ Dashboard NENÍ chráněný (nastav AUTH_USER a AUTH_PASS).');
   } else {
-    console.log('🔒 Dashboard chráněný Basic Auth.');
+    console.log(
+      '🔒 Dashboard chráněný Basic Auth' +
+      (CONFIG.auth.user2 && CONFIG.auth.pass2 ? ' (2 účty).' : ' (1 účet).')
+    );
   }
 
   // Žádný automatický fetch po startu ani pevný interval.
