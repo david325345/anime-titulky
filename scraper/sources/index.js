@@ -6,6 +6,9 @@ import * as hns from './hns.js';
 import * as hannyasubs from './hannyasubs.js';
 import * as kamui from './kamui.js';
 import * as underkotatsu from './underkotatsu.js';
+import * as hanabi from './hanabi.js';
+import * as hajimarisubs from './hajimarisubs.js';
+import * as ange3mka from './ange3mka.js';
 
 const SOURCES = {
   'wosir.cz': wosir,
@@ -13,6 +16,9 @@ const SOURCES = {
   'hannya-subs.blogspot.com': hannyasubs,
   'kamui-subs.cz': kamui,
   'underkotatsusubs.cz': underkotatsu,
+  'hanabi.fan': hanabi,
+  'hajimarisubs.net': hajimarisubs,
+  'ange.3mka.cz': ange3mka,
   // 'dalsi-web.cz': dalsiModul,
 };
 
