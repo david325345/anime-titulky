@@ -82,6 +82,12 @@ export const CONFIG = {
     url: process.env.AGENT_URL || '',
     token: process.env.AGENT_TOKEN || '',
   },
+
+  // wosir.cz — vyžaduje vlastní účet (přihlášení e-mailem).
+  wosir: {
+    email: process.env.WOSIR_EMAIL || '',
+    pass: process.env.WOSIR_PASS || '',
+  },
 };
 
 export function assertConfig() {
