@@ -74,6 +74,14 @@ export const CONFIG = {
     user2: process.env.AUTH_USER2 || '',
     pass2: process.env.AUTH_PASS2 || '',
   },
+
+  // Český "fetcher" agent (agent.php na CZ hostingu). Weby ange.3mka.cz a wosir.cz
+  // blokují zahraniční/datacenter IP → stahujeme přes něj. Bez AGENT_URL se tyto
+  // zdroje nestahují (parser hodí srozumitelnou chybu).
+  agent: {
+    url: process.env.AGENT_URL || '',
+    token: process.env.AGENT_TOKEN || '',
+  },
 };
 
 export function assertConfig() {
