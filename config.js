@@ -88,6 +88,12 @@ export const CONFIG = {
     email: process.env.WOSIR_EMAIL || '',
     pass: process.env.WOSIR_PASS || '',
   },
+
+  // gensubs.cz — vyžaduje vlastní účet (web jde přímo, bez agenta).
+  gensubs: {
+    user: process.env.GENSUBS_USER || '',
+    pass: process.env.GENSUBS_PASS || '',
+  },
 };
 
 export function assertConfig() {
