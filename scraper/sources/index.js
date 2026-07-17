@@ -9,6 +9,7 @@ import * as underkotatsu from './underkotatsu.js';
 import * as hanabi from './hanabi.js';
 import * as hajimarisubs from './hajimarisubs.js';
 import * as ange3mka from './ange3mka.js';
+import * as gensubs from './gensubs.js';
 
 const SOURCES = {
   'wosir.cz': wosir,
@@ -19,6 +20,7 @@ const SOURCES = {
   'hanabi.fan': hanabi,
   'hajimarisubs.net': hajimarisubs,
   'ange.3mka.cz': ange3mka,
+  'gensubs.cz': gensubs,
   // 'dalsi-web.cz': dalsiModul,
 };
 
