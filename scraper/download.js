@@ -6,7 +6,7 @@ import zlib from 'node:zlib';
 import { getBinary } from './http.js';
 import { CONFIG } from '../config.js';
 import { r2Enabled, r2Put, r2PublicUrl } from '../r2.js';
-import { setReleaseIfEmpty } from '../db.js';
+import { setReleaseIfEmpty, setRelease } from '../db.js';
 
 // skupina z první [..] závorky názvu (odmítne kvalitu/tech značky jako [1080p])
 function groupFromName(name) {
@@ -80,8 +80,12 @@ export async function saveSubFile(sub, buf, rawName) {
     fs.writeFileSync(local_path, buf);
   }
 
-  // release z hiyori chybí → doplň skupinu z názvu souboru (jen skupina)
-  if (!sub.release) {
+  // release: když ho parser pošle (např. BD verze), zapiš ho i přes to,
+  // co je v DB (parser rozpoznal víc — třeba BD). Jinak, když v DB chybí,
+  // doplň skupinu z názvu souboru.
+  if (sub.release) {
+    setRelease(sub.sub_id, sub.release);
+  } else {
     const g = groupFromName(rawName || filename);
     if (g) setReleaseIfEmpty(sub.sub_id, g);
   }
