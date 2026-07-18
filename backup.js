@@ -119,7 +119,13 @@ export async function restoreDbFromBuffer(uploaded) {
     }
   } catch {}
 
-  // 5) přepiš živou DB + ukliď WAL/SHM (aby se nemíchaly se starým stavem)
+  // 5) ZAVŘI živý DB handle před přepsáním. SQLite tím dopíše WAL do hlavního
+  //    souboru a uvolní zámky — zabrání to souběžnému zápisu do souboru, který
+  //    zrovna přepisujeme (dva zápisy naráz = riziko poškození DB). Proces se
+  //    hned poté ukončí (restart), takže zavřený handle už nikdo nepotřebuje.
+  try { db.close(); } catch {}
+
+  // 6) přepiš živou DB + ukliď WAL/SHM (aby se nemíchaly se starým stavem)
   fs.writeFileSync(dbPath, raw);
   for (const ext of ['-wal', '-shm']) {
     try { fs.unlinkSync(dbPath + ext); } catch {}

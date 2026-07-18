@@ -182,6 +182,14 @@ app.post('/api/backup/restore',
     if (!req.body || !req.body.length) {
       return res.status(400).json({ ok: false, error: 'Prázdný soubor.' });
     }
+    // Neobnovovat, když běží scrape — zapisoval by do DB, kterou přepisujeme
+    // (dva zápisy naráz = riziko poškození). Ať uživatel počká / zastaví běh.
+    if (isRunning()) {
+      return res.status(409).json({
+        ok: false,
+        error: 'Právě běží stahování — počkej, až doběhne, a zkus to znovu.',
+      });
+    }
     try {
       const r = await restoreDbFromBuffer(req.body);
       // odpověz PŘED restartem (klient uvidí úspěch), pak se ukonči
