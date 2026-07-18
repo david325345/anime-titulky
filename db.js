@@ -204,6 +204,7 @@ export const getDownloadCandidates = (limit = 30) =>
     .prepare(
       `SELECT * FROM subs
        WHERE status IN ('new','not_downloaded','pending_extern')
+         AND kind <> 'manual'
        ORDER BY first_seen ASC, sub_id ASC LIMIT ?`
     )
     .all(limit);

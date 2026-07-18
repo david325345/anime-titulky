@@ -62,3 +62,13 @@ export async function r2Get(key) {
   }
   return Buffer.from(await res.arrayBuffer());
 }
+
+// smaže objekt z R2. Vrací true když proběhlo (i 404 bereme jako "už není").
+export async function r2Delete(key) {
+  const c = getClient();
+  if (!c || !key) return false;
+  const res = await c.fetch(endpoint(key), { method: 'DELETE' });
+  if (res.ok || res.status === 204 || res.status === 404) return true;
+  const t = await res.text().catch(() => '');
+  throw new Error(`R2 DELETE ${res.status}: ${t.slice(0, 200)}`);
+}
