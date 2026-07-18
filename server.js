@@ -19,18 +19,28 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 
 // --- Basic Auth (dashboard + admin). Když AUTH_USER/AUTH_PASS chybí, nechrání se. ---
-// Volitelný druhý účet: AUTH_USER2/AUTH_PASS2 (stejná práva).
+// Volitelný druhý účet: AUTH_USER2/AUTH_PASS2 (stejná práva KROMĚ mazání).
+// Ukládá req.authRole: 'user1' (hlavní účet), 'user2' (druhý), nebo 'open' (bez auth).
 function basicAuth(req, res, next) {
   const { user, pass, user2, pass2 } = CONFIG.auth;
-  if (!user || !pass) return next(); // nenastaveno → veřejné (viz upozornění v logu)
+  if (!user || !pass) { req.authRole = 'open'; return next(); }
   const m = (req.headers.authorization || '').match(/^Basic (.+)$/i);
   if (m) {
     const [u, p] = Buffer.from(m[1], 'base64').toString('utf8').split(':');
-    if (u === user && p === pass) return next();
-    if (user2 && pass2 && u === user2 && p === pass2) return next();
+    if (u === user && p === pass) { req.authRole = 'user1'; return next(); }
+    if (user2 && pass2 && u === user2 && p === pass2) { req.authRole = 'user2'; return next(); }
   }
   res.set('WWW-Authenticate', 'Basic realm="NimeToDex Titulky"');
   return res.status(401).send('Přihlášení vyžadováno.');
+}
+
+// Jen hlavní účet (user1). Když je auth vypnutá ('open'), pustí — jinak by
+// nešlo nic mazat bez nastavených účtů. Druhý účet (user2) dostane 403.
+function requireUser1(req, res, next) {
+  if (req.authRole === 'user2') {
+    return res.status(403).json({ error: 'Mazání je povolené jen hlavnímu účtu.' });
+  }
+  next();
 }
 
 // ==================================================================
@@ -133,6 +143,11 @@ app.get('/api/all', (req, res) => {
 // ==================================================================
 app.use(basicAuth);
 
+// role přihlášeného účtu — frontend podle toho skryje mazací tlačítka user2
+app.get('/api/whoami', (req, res) => {
+  res.json({ role: req.authRole, can_delete: req.authRole !== 'user2' });
+});
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 // souhrn pro dashboard
@@ -164,7 +179,7 @@ app.get('/api/subs-list', (req, res) => {
 });
 
 // smazání záznamu (z DB; soubor na R2 zůstává)
-app.delete('/api/sub/:subId', async (req, res) => {
+app.delete('/api/sub/:subId', requireUser1, async (req, res) => {
   const subId = Number(req.params.subId);
   const alsoR2 = req.query.r2 === '1' || req.query.r2 === 'true';
 
@@ -245,6 +260,7 @@ app.get('/api/add-anime', async (req, res) => {
         epFrom, epTo,
         lang: req.query.lang || 'CZ',
         group: req.query.group || null,
+        release: req.query.release || null,
       });
       return res.json({
         ok: true,
