@@ -164,6 +164,48 @@ export async function downloadOnce({ log = console.log } = {}) {
   return { ok: !!ok, ...stats, error: errMsg };
 }
 
+// Stáhne JEDEN konkrétní záznam (tlačítko u čekajícího titulku v dashboardu).
+// Obchází frontu i per-host limity — je to cílená ruční akce na jeden sub_id.
+export async function downloadSingle(subId, { log = console.log } = {}) {
+  if (!CONFIG.downloadEnabled) {
+    return { ok: false, error: 'Stahování je vypnuté (DOWNLOAD_ENABLED != true).' };
+  }
+  const sub = getSub(subId);
+  if (!sub) return { ok: false, error: 'Záznam nenalezen.' };
+  if (sub.status === 'downloaded') {
+    return { ok: false, error: 'Titulek je už stažený.' };
+  }
+  if (sub.kind === 'extern' && !hasSourceFor(sub.extern_domain)) {
+    return { ok: false, error: `Pro ${sub.extern_domain} zatím není parser.` };
+  }
+
+  try {
+    let res;
+    if (sub.kind === 'direct') {
+      res = await downloadDirect(sub);
+    } else {
+      const ext = await downloadExtern(sub);
+      if (!ext.supported) {
+        return { ok: false, error: `Pro ${sub.extern_domain} zatím není parser.` };
+      }
+      res = ext;
+    }
+    markDownloaded({
+      sub_id: subId,
+      filename: res.filename,
+      local_path: res.local_path,
+      file_bytes: res.file_bytes,
+      r2_key: res.r2_key ?? null,
+    });
+    log(`✓ ručně staženo sub ${subId} (${res.filename})`);
+    return { ok: true, filename: res.filename, file_bytes: res.file_bytes };
+  } catch (e) {
+    markFailed(subId, e.message);
+    log(`✗ ruční stažení sub ${subId}: ${e.message}`);
+    return { ok: false, error: e.message };
+  }
+}
+
 export async function runOnce({ log = console.log } = {}) {
   if (running) {
     log('Scrape už běží, přeskočeno.');
