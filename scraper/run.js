@@ -71,6 +71,62 @@ export async function ingestAnime(hiyoriId, card = {}, { onlyEpisodes = null } =
 
 // Stahovací fáze — vezme frontu z DB, per-web limit, stáhne + nahraje na R2.
 // Sdílená mezi plným během (runOnce) a ručním "jen stahování" (downloadOnce).
+// Ruční přidání titulků: hiyori má anime (metadata), ale ne titulky
+// (skupina je hostuje jen u sebe). Vytvoří PRÁZDNÉ záznamy pro rozsah dílů,
+// ke kterým se pak ručně nahraje soubor přes 📤. Žádný odkaz — univerzální.
+// Fake sub_id z rozsahu 900000000+ (deterministicky: nekoliduje s hiyori
+// ani s hns variantami 700M; stejný díl 2× nevytvoří duplicitu).
+const MANUAL_ID_BASE = 900000000;
+
+export async function addManualEpisodes(hiyoriId, { epFrom, epTo, lang, group }) {
+  const detail = await getDetail(hiyoriId);
+  upsertAnime({
+    hiyori_id: hiyoriId,
+    anilist_id: detail.anilist_id,
+    mal_id: detail.mal_id,
+    title: detail.title,
+    type: detail.type,
+  });
+
+  const from = Math.max(1, Number(epFrom) || 1);
+  const to = Math.max(from, Number(epTo) || from);
+  const now = new Date().toISOString();
+
+  let added = 0;
+  const episodes = [];
+  for (let ep = from; ep <= to; ep++) {
+    const sub_id = MANUAL_ID_BASE + hiyoriId * 1000 + ep;
+    const changed = insertSub({
+      sub_id,
+      hiyori_id: hiyoriId,
+      anilist_id: detail.anilist_id,
+      mal_id: detail.mal_id,
+      anime_title: detail.title,
+      episode: ep,
+      lang: lang || 'CZ',
+      group_id: null,
+      group_name: group || null,
+      release: null,
+      version: null,
+      kind: 'manual',
+      url: null,
+      extern_domain: null,
+      added_date: now,
+      first_seen: now,
+      status: 'not_downloaded', // čeká na ruční nahrání přes 📤
+    });
+    if (changed) added++;
+    episodes.push(ep);
+  }
+
+  return {
+    title: detail.title,
+    anilistId: detail.anilist_id,
+    malId: detail.mal_id,
+    from, to, added, episodes,
+  };
+}
+
 async function downloadQueue({ log, stats }) {
   if (!CONFIG.downloadEnabled) {
     log('Stahování vypnuté (DOWNLOAD_ENABLED != true) — jen evidence.');
@@ -174,6 +230,9 @@ export async function downloadSingle(subId, { log = console.log } = {}) {
   if (!sub) return { ok: false, error: 'Záznam nenalezen.' };
   if (sub.status === 'downloaded') {
     return { ok: false, error: 'Titulek je už stažený.' };
+  }
+  if (sub.kind === 'manual') {
+    return { ok: false, error: 'Ruční záznam — nahraj titulek přes 📤.' };
   }
   if (sub.kind === 'extern' && !hasSourceFor(sub.extern_domain)) {
     return { ok: false, error: `Pro ${sub.extern_domain} zatím není parser.` };
