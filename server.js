@@ -334,7 +334,7 @@ app.get('/api/add-anime', async (req, res) => {
       });
     }
 
-    const r = await ingestAnime(hiyoriId);
+    const r = await ingestAnime(hiyoriId, {}, { manualAdd: true });
     res.json({
       ok: true,
       hiyori_id: hiyoriId,

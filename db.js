@@ -52,7 +52,8 @@ CREATE TABLE IF NOT EXISTS subs (
   local_path    TEXT,
   file_bytes    INTEGER,
   r2_key        TEXT,           -- klíč na R2 (subs/{anilist}/E{ep}/...gz)
-  downloaded_at TEXT
+  downloaded_at TEXT,
+  manual_add    INTEGER DEFAULT 0  -- 0 = automatický scrape, 1 = ručně přidané přes URL (ve frontě až potom)
 );
 CREATE INDEX IF NOT EXISTS idx_subs_status   ON subs(status);
 CREATE INDEX IF NOT EXISTS idx_subs_anilist  ON subs(anilist_id);
@@ -82,6 +83,7 @@ function ensureColumn(table, column, type) {
   }
 }
 ensureColumn('subs', 'r2_key', 'TEXT');
+ensureColumn('subs', 'manual_add', 'INTEGER DEFAULT 0');
 
 // --- meta helpers ---
 const _getMeta = db.prepare('SELECT value FROM meta WHERE key=?');
@@ -112,13 +114,14 @@ const _subExists = db.prepare('SELECT 1 FROM subs WHERE sub_id=?');
 const _insertSub = db.prepare(`
   INSERT OR IGNORE INTO subs
     (sub_id,hiyori_id,anilist_id,mal_id,anime_title,episode,lang,group_id,group_name,
-     release,version,kind,url,extern_domain,added_date,first_seen,status)
+     release,version,kind,url,extern_domain,added_date,first_seen,status,manual_add)
   VALUES
     (@sub_id,@hiyori_id,@anilist_id,@mal_id,@anime_title,@episode,@lang,@group_id,@group_name,
-     @release,@version,@kind,@url,@extern_domain,@added_date,@first_seen,@status)
+     @release,@version,@kind,@url,@extern_domain,@added_date,@first_seen,@status,@manual_add)
 `);
 export const subExists = (id) => !!_subExists.get(id);
-export const insertSub = (row) => _insertSub.run(row).changes; // 1 = nově vloženo
+export const insertSub = (row) =>
+  _insertSub.run({ manual_add: 0, ...row }).changes; // 1 = nově vloženo
 
 const _markDownloaded = db.prepare(`
   UPDATE subs SET status='downloaded', filename=@filename, local_path=@local_path,
@@ -205,7 +208,7 @@ export const getDownloadCandidates = (limit = 30) =>
       `SELECT * FROM subs
        WHERE status IN ('new','not_downloaded','pending_extern')
          AND kind <> 'manual'
-       ORDER BY first_seen ASC, sub_id ASC LIMIT ?`
+       ORDER BY manual_add ASC, first_seen ASC, sub_id ASC LIMIT ?`
     )
     .all(limit);
 
