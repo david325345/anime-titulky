@@ -13,6 +13,7 @@ import * as hanabi from './scraper/sources/hanabi.js';
 import { saveSubFile } from './scraper/download.js';
 import AdmZip from 'adm-zip';
 import { r2PublicUrl, r2Get, r2Delete } from './r2.js';
+import { liveDbGzip, backupDbToR2, startDbBackup } from './backup.js';
 import zlib from 'node:zlib';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -146,6 +147,29 @@ app.use(basicAuth);
 // role přihlášeného účtu — frontend podle toho skryje mazací tlačítka user2
 app.get('/api/whoami', (req, res) => {
   res.json({ role: req.authRole, can_delete: req.authRole !== 'user2' });
+});
+
+// stažení aktuální živé DB (gzip). Jen user1 — obsahuje kompletní evidenci.
+app.get('/api/backup/download', requireUser1, async (req, res) => {
+  try {
+    const { buffer } = await liveDbGzip();
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    res.setHeader('Content-Type', 'application/gzip');
+    res.setHeader('Content-Disposition', `attachment; filename="hiyori-${stamp}.db.gz"`);
+    res.send(buffer);
+  } catch (e) {
+    res.status(500).json({ error: 'Záloha selhala: ' + e.message });
+  }
+});
+
+// ruční spuštění zálohy na R2 (jinak běží automaticky 1× denně). Jen user1.
+app.post('/api/backup/run', requireUser1, async (req, res) => {
+  try {
+    const r = await backupDbToR2();
+    res.json({ ok: true, key: r.key, bytes: r.bytes });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
@@ -417,6 +441,9 @@ app.listen(CONFIG.port, () => {
   // Jednou týdně pingneme hostitele agenta (GET na jeho kořen) — udrží web
   // naživu a zároveň ověří, že agent žije.
   startAgentKeepAlive();
+
+  // Denní záloha DB na R2 (retence 7 dní).
+  startDbBackup();
 });
 
 function startAgentKeepAlive() {
