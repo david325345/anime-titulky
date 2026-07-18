@@ -1,6 +1,15 @@
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
+// role účtu — mazací tlačítka vidí jen hlavní účet (ne user2)
+let canDelete = true;
+async function loadRole() {
+  try {
+    const r = await (await fetch('/api/whoami')).json();
+    canDelete = !!r.can_delete;
+  } catch { canDelete = true; }
+}
+
 function fmtDate(iso) {
   if (!iso) return '—';
   const d = new Date(iso);
@@ -75,7 +84,7 @@ function renderSubs(subs) {
       <td class="nowrap">${statusCell(s)}</td>
       <td class="nowrap">${onR2}</td>
       <td class="nowrap">${dl}</td>
-      <td class="nowrap">${dlNowBtn}${uploadBtn}<button class="del" data-id="${s.sub_id}" title="Smazat záznam z DB (na R2 zůstává)">✖</button>${s.r2_key ? `<button class="del-r2" data-id="${s.sub_id}" title="Smazat úplně (DB i soubor na R2)">🗑</button>` : ''}</td>
+      <td class="nowrap">${dlNowBtn}${uploadBtn}${canDelete ? `<button class="del" data-id="${s.sub_id}" title="Smazat záznam z DB (na R2 zůstává)">✖</button>` : ''}${(canDelete && s.r2_key) ? `<button class="del-r2" data-id="${s.sub_id}" title="Smazat úplně (DB i soubor na R2)">🗑</button>` : ''}</td>
     </tr>`;
   }).join('') || `<tr><td colspan="11" class="muted">Nic nenalezeno.</td></tr>`;
 }
@@ -155,7 +164,8 @@ async function addAnime() {
     }
     query += `&ep_from=${from}&ep_to=${to}` +
       `&lang=${encodeURIComponent($('#mLang').value.trim() || 'CZ')}` +
-      `&group=${encodeURIComponent($('#mGroup').value.trim())}`;
+      `&group=${encodeURIComponent($('#mGroup').value.trim())}` +
+      `&release=${encodeURIComponent($('#mRelease').value.trim())}`;
   }
 
   $('#addBtn').disabled = true;
@@ -331,5 +341,5 @@ $('#subsTable').addEventListener('click', async (e) => {
   } catch (e) { btn.disabled = false; }
 });
 
-load();
+loadRole().then(load);
 setInterval(loadOverview, 5000); // auto-refresh jen souhrn (netrhá stránkování/hledání)
