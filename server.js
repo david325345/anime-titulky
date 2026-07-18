@@ -4,7 +4,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { CONFIG } from './config.js';
-import { runOnce, downloadOnce, downloadSingle, isRunning, ingestAnime } from './scraper/run.js';
+import { runOnce, downloadOnce, downloadSingle, isRunning, ingestAnime, addManualEpisodes } from './scraper/run.js';
 import {
   overviewCounts, recentSubs, recentRuns, getMeta, getSub, findSubs, subsAvailability,
   listSubs, deleteSub, recentlyAdded, markDownloaded, allSubs,
@@ -12,7 +12,7 @@ import {
 import * as hanabi from './scraper/sources/hanabi.js';
 import { saveSubFile } from './scraper/download.js';
 import AdmZip from 'adm-zip';
-import { r2PublicUrl, r2Get } from './r2.js';
+import { r2PublicUrl, r2Get, r2Delete } from './r2.js';
 import zlib from 'node:zlib';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -164,9 +164,23 @@ app.get('/api/subs-list', (req, res) => {
 });
 
 // smazání záznamu (z DB; soubor na R2 zůstává)
-app.delete('/api/sub/:subId', (req, res) => {
-  const n = deleteSub(Number(req.params.subId));
-  res.json({ deleted: n > 0 });
+app.delete('/api/sub/:subId', async (req, res) => {
+  const subId = Number(req.params.subId);
+  const alsoR2 = req.query.r2 === '1' || req.query.r2 === 'true';
+
+  let r2Deleted = false;
+  if (alsoR2) {
+    const sub = getSub(subId);
+    if (sub?.r2_key) {
+      try {
+        r2Deleted = await r2Delete(sub.r2_key);
+      } catch (e) {
+        return res.status(500).json({ deleted: false, error: 'R2: ' + e.message });
+      }
+    }
+  }
+  const n = deleteSub(subId);
+  res.json({ deleted: n > 0, r2_deleted: r2Deleted });
 });
 
 // (pře)plánování hodinového intervalu — resetuje se při každém ručním spuštění.
@@ -220,7 +234,31 @@ app.get('/api/add-anime', async (req, res) => {
       error: 'Zadej odkaz na anime z hiyori (např. https://hiyori.cz/anime/21389) nebo číslo.',
     });
   }
+  // Ruční režim: zadán rozsah dílů → vytvoř prázdné záznamy (hiyori nemá titulky).
+  const epFrom = req.query.ep_from != null ? Number(req.query.ep_from) : null;
+  const epTo = req.query.ep_to != null ? Number(req.query.ep_to) : null;
+  const manual = epFrom != null || epTo != null;
+
   try {
+    if (manual) {
+      const r = await addManualEpisodes(hiyoriId, {
+        epFrom, epTo,
+        lang: req.query.lang || 'CZ',
+        group: req.query.group || null,
+      });
+      return res.json({
+        ok: true,
+        manual: true,
+        hiyori_id: hiyoriId,
+        title: (r.title || '').replace(/\s*-\s*Hiyori$/i, ''),
+        anilist_id: r.anilistId,
+        mal_id: r.malId,
+        from: r.from,
+        to: r.to,
+        added: r.added,
+      });
+    }
+
     const r = await ingestAnime(hiyoriId);
     res.json({
       ok: true,
