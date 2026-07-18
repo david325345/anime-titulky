@@ -8,8 +8,10 @@ async function loadRole() {
     const r = await (await fetch('/api/whoami')).json();
     canDelete = !!r.can_delete;
     // záloha DB jen pro hlavní účet (obsahuje kompletní evidenci)
-    const bb = $('#backupBtn');
-    if (bb && r.role !== 'user2') bb.style.display = '';
+    if (r.role !== 'user2') {
+      const bb = $('#backupBtn'); if (bb) bb.style.display = '';
+      const rb = $('#restoreBtn'); if (rb) rb.style.display = '';
+    }
   } catch { canDelete = true; }
 }
 
@@ -152,6 +154,44 @@ $('#dlBtn').addEventListener('click', async () => {
 $('#backupBtn').addEventListener('click', () => {
   // prohlížeč stáhne soubor přímo z endpointu (gzip DB)
   window.location.href = '/api/backup/download';
+});
+
+$('#restoreBtn').addEventListener('click', () => $('#restoreFile').click());
+$('#restoreFile').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  e.target.value = ''; // reset, ať jde nahrát ten samý soubor znovu
+  if (!confirm(
+    `Obnovit databázi ze souboru "${file.name}"?\n\n` +
+    `Tím se PŘEPÍŠE aktuální databáze a služba se restartuje.\n` +
+    `(Aktuální stav se pro jistotu zazálohuje.)\n\nToto je nevratné.`
+  )) return;
+
+  const rb = $('#restoreBtn');
+  rb.disabled = true;
+  const orig = rb.textContent;
+  rb.textContent = '⏳ Obnovuji…';
+  try {
+    const buf = await file.arrayBuffer();
+    const r = await (await fetch('/api/backup/restore', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: buf,
+    })).json();
+    if (r.ok) {
+      alert('✅ ' + (r.message || 'DB obnovena. Služba se restartuje.'));
+      // po restartu (~10 s) obnov stránku
+      setTimeout(() => location.reload(), 10000);
+    } else {
+      alert('⚠ Obnova selhala: ' + (r.error || 'neznámá chyba'));
+      rb.disabled = false;
+      rb.textContent = orig;
+    }
+  } catch (err) {
+    alert('⚠ Chyba: ' + err.message);
+    rb.disabled = false;
+    rb.textContent = orig;
+  }
 });
 
 async function addAnime() {
