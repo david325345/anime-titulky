@@ -40,6 +40,9 @@ button:disabled { opacity: .5; cursor: default; }
 .hanabi-link:hover { filter: brightness(1.2); }
 .upload-sub { background: #2f4a3a; border: 1px solid #4a7c5a; color: #c4ffd0; padding: 3px 8px; font-size: 13px; border-radius: 6px; cursor: pointer; margin-right: 4px; }
 .upload-sub:hover { filter: brightness(1.2); }
+.dl-one { background: #2a3f5a; border: 1px solid #4a6c9c; color: #c4dcff; padding: 3px 8px; font-size: 13px; border-radius: 6px; cursor: pointer; margin-right: 4px; }
+.dl-one:hover { filter: brightness(1.2); }
+.dl-one:disabled { opacity: .5; cursor: default; }
 .muted { color: var(--muted); }
 
 main { padding: 22px; max-width: 1200px; margin: 0 auto; }
