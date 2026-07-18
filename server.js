@@ -4,7 +4,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { CONFIG } from './config.js';
-import { runOnce, downloadOnce, isRunning, ingestAnime } from './scraper/run.js';
+import { runOnce, downloadOnce, downloadSingle, isRunning, ingestAnime } from './scraper/run.js';
 import {
   overviewCounts, recentSubs, recentRuns, getMeta, getSub, findSubs, subsAvailability,
   listSubs, deleteSub, recentlyAdded, markDownloaded, allSubs,
@@ -196,6 +196,19 @@ app.post('/api/download-only', (req, res) => {
   res.json({ started: true });
 });
 
+// stažení JEDNOHO konkrétního záznamu (tlačítko u čekajícího titulku).
+// Synchronní — počká na výsledek a vrátí ho, ať dashboard hned ukáže stav.
+app.post('/api/download-sub/:id', async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ ok: false, error: 'Neplatné id.' });
+  try {
+    const r = await downloadSingle(id);
+    res.json(r);
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // ruční přidání anime z hiyori URL (nebo ID) — naparsuje titulky, zařadí do fronty
 app.get('/api/add-anime', async (req, res) => {
   const input = String(req.query.url || req.query.id || '').trim();
@@ -345,4 +358,34 @@ app.listen(CONFIG.port, () => {
   // Žádný automatický fetch po startu ani pevný interval.
   // Interval se rozjede až po ručním "Spustit teď" (viz scheduleInterval).
   console.log('Po startu se automaticky NEfetchuje. Spusť ručně přes "Spustit teď".');
+
+  // Keep-alive: webzdarma smaže web, když na něj měsíc nikdo nepřijde.
+  // Jednou týdně pingneme hostitele agenta (GET na jeho kořen) — udrží web
+  // naživu a zároveň ověří, že agent žije.
+  startAgentKeepAlive();
 });
+
+function startAgentKeepAlive() {
+  if (!CONFIG.agent.url) return; // agent nenastaven → nic
+  let host;
+  try {
+    host = new URL(CONFIG.agent.url).origin; // http://nimetodex.xf.cz
+  } catch {
+    return;
+  }
+  const WEEK = 7 * 24 * 60 * 60 * 1000;
+  const ping = async () => {
+    try {
+      const r = await fetch(host + '/', {
+        headers: { 'User-Agent': 'NimeToDex-KeepAlive/1.0' },
+        signal: AbortSignal.timeout(15000),
+      });
+      console.log(`[keep-alive] ${host} → HTTP ${r.status} (${new Date().toISOString()})`);
+    } catch (e) {
+      console.log(`[keep-alive] ${host} selhalo: ${e.message}`);
+    }
+  };
+  // první ping za 1 min po startu (ať se to nepere se startem), pak každý týden
+  setTimeout(ping, 60_000);
+  setInterval(ping, WEEK).unref();
+}
