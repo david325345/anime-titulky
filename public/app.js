@@ -66,8 +66,8 @@ function renderSubs(subs) {
     const uploadBtn = s.status !== 'downloaded'
       ? `<button class="upload-sub" data-id="${s.sub_id}" title="Nahrát titulek ručně (.ass/.srt/.zip)">📤</button>`
       : '';
-    // stáhnout právě tenhle záznam teď (jen u nestažených)
-    const dlNowBtn = s.status !== 'downloaded'
+    // stáhnout právě tenhle záznam teď (jen u nestažených, ne u ručních — ty čekají na 📤)
+    const dlNowBtn = (s.status !== 'downloaded' && s.kind !== 'manual')
       ? `<button class="dl-one" data-id="${s.sub_id}" title="Stáhnout tento titulek teď">⬇</button>`
       : '';
     const onR2 = s.r2_key
