@@ -75,7 +75,7 @@ function renderSubs(subs) {
       <td class="nowrap">${statusCell(s)}</td>
       <td class="nowrap">${onR2}</td>
       <td class="nowrap">${dl}</td>
-      <td class="nowrap">${dlNowBtn}${uploadBtn}<button class="del" data-id="${s.sub_id}" title="Smazat záznam (na R2 zůstává)">✕</button></td>
+      <td class="nowrap">${dlNowBtn}${uploadBtn}<button class="del" data-id="${s.sub_id}" title="Smazat záznam z DB (na R2 zůstává)">✖</button>${s.r2_key ? `<button class="del-r2" data-id="${s.sub_id}" title="Smazat úplně (DB i soubor na R2)">🗑</button>` : ''}</td>
     </tr>`;
   }).join('') || `<tr><td colspan="11" class="muted">Nic nenalezeno.</td></tr>`;
 }
@@ -141,18 +141,39 @@ async function addAnime() {
   const url = $('#addUrl').value.trim();
   const msg = $('#addMsg');
   if (!url) { msg.textContent = 'Vlož odkaz na anime z hiyori.'; return; }
+
+  const manual = $('#manualChk').checked;
+  let query = '/api/add-anime?url=' + encodeURIComponent(url);
+
+  if (manual) {
+    const from = Number($('#epFrom').value);
+    const to = Number($('#epTo').value);
+    if (!from || !to || to < from) {
+      msg.className = 'addmsg err';
+      msg.textContent = '⚠ Zadej platný rozsah dílů (od–do).';
+      return;
+    }
+    query += `&ep_from=${from}&ep_to=${to}` +
+      `&lang=${encodeURIComponent($('#mLang').value.trim() || 'CZ')}` +
+      `&group=${encodeURIComponent($('#mGroup').value.trim())}`;
+  }
+
   $('#addBtn').disabled = true;
   msg.className = 'addmsg muted';
   msg.textContent = 'Načítám…';
   try {
-    const r = await (await fetch('/api/add-anime?url=' + encodeURIComponent(url))).json();
+    const r = await (await fetch(query)).json();
     if (r.error) {
       msg.className = 'addmsg err';
       msg.textContent = '⚠ ' + r.error;
     } else {
       msg.className = 'addmsg ok';
-      const dl = r.download_enabled ? 'zařazeno do fronty' : 'evidováno (stahování vypnuté)';
-      msg.textContent = `✅ ${r.title || 'anime'} — nalezeno ${r.found} titulků, nových ${r.added}, ${dl}.`;
+      if (r.manual) {
+        msg.textContent = `✅ ${r.title || 'anime'} — vytvořeno ${r.added} prázdných záznamů (díly ${r.from}–${r.to}). Nahraj k nim titulky přes 📤.`;
+      } else {
+        const dl = r.download_enabled ? 'zařazeno do fronty' : 'evidováno (stahování vypnuté)';
+        msg.textContent = `✅ ${r.title || 'anime'} — nalezeno ${r.found} titulků, nových ${r.added}, ${dl}.`;
+      }
       $('#addUrl').value = '';
       load();
     }
@@ -165,6 +186,9 @@ async function addAnime() {
 }
 $('#addBtn').addEventListener('click', addAnime);
 $('#addUrl').addEventListener('keydown', (e) => { if (e.key === 'Enter') addAnime(); });
+$('#manualChk').addEventListener('change', (e) => {
+  $('#manualRow').style.display = e.target.checked ? 'flex' : 'none';
+});
 
 // stránkování
 $('#prevBtn').addEventListener('click', () => { if (curPage > 1) { curPage--; loadSubs(); } });
@@ -272,11 +296,33 @@ $('#subsTable').addEventListener('click', async (e) => {
     return;
   }
 
-  // mazání záznamu
+  // úplné smazání (DB + R2)
+  const r2Btn = e.target.closest('button.del-r2');
+  if (r2Btn) {
+    const id = r2Btn.dataset.id;
+    if (!confirm('Smazat ÚPLNĚ — záznam z DB i soubor z R2?\n\nToto je nevratné.')) return;
+    r2Btn.disabled = true;
+    try {
+      const r = await (await fetch(`/api/sub/${id}?r2=1`, { method: 'DELETE' })).json();
+      if (r.error) {
+        alert('Nešlo smazat z R2: ' + r.error);
+        r2Btn.disabled = false;
+      } else {
+        loadSubs();
+        loadOverview();
+      }
+    } catch (err) {
+      alert('Chyba: ' + err.message);
+      r2Btn.disabled = false;
+    }
+    return;
+  }
+
+  // mazání záznamu (jen DB)
   const btn = e.target.closest('button.del');
   if (!btn) return;
   const id = btn.dataset.id;
-  if (!confirm('Smazat tento záznam? (soubor na R2 zůstane)')) return;
+  if (!confirm('Smazat tento záznam z DB? (soubor na R2 zůstane)')) return;
   btn.disabled = true;
   try {
     await fetch(`/api/sub/${id}`, { method: 'DELETE' });
