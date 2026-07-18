@@ -25,6 +25,16 @@
         <input id="addUrl" type="text" placeholder="https://hiyori.cz/anime/21389 nebo 21389" />
         <button id="addBtn">Přidat</button>
       </div>
+      <label class="manual-toggle">
+        <input type="checkbox" id="manualChk" />
+        Ruční titulky (hiyori má anime, ale ne titulky — vytvoří prázdné záznamy pro rozsah dílů)
+      </label>
+      <div id="manualRow" class="addrow manual-row" style="display:none">
+        <input id="epFrom" type="number" min="1" placeholder="od dílu" class="ep-inp" />
+        <input id="epTo" type="number" min="1" placeholder="do dílu" class="ep-inp" />
+        <input id="mLang" type="text" placeholder="jazyk (CZ)" class="ep-inp" value="CZ" />
+        <input id="mGroup" type="text" placeholder="skupina" class="ep-inp" />
+      </div>
       <div id="addMsg" class="addmsg muted"></div>
     </section>
 
