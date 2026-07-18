@@ -10,6 +10,8 @@ import * as hanabi from './hanabi.js';
 import * as hajimarisubs from './hajimarisubs.js';
 import * as ange3mka from './ange3mka.js';
 import * as gensubs from './gensubs.js';
+import * as legiekondor from './legiekondor.js';
+import * as nyasub from './nyasub.js';
 
 const SOURCES = {
   'wosir.cz': wosir,
@@ -21,6 +23,8 @@ const SOURCES = {
   'hajimarisubs.net': hajimarisubs,
   'ange.3mka.cz': ange3mka,
   'gensubs.cz': gensubs,
+  'anime4.legiekondor.cz': legiekondor,
+  'nyasub.cz': nyasub,
   // 'dalsi-web.cz': dalsiModul,
 };
 
