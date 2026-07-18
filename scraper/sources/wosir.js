@@ -174,10 +174,7 @@ export async function download(sub) {
     `wosir-ep${sub.episode}.ass`;
 
   const grp = sub.group_name || 'WoŠir';
-  // BD verzi označíme v release (ať se odliší od web-ripu v katalogu).
-  // Když už release z hiyori existuje, přidáme "BD"; jinak "BD" samotné.
-  const release = form.isBD
-    ? (sub.release ? `${sub.release} (BD)` : 'BD')
-    : sub.release;
+  // BD verze → release označíme jako "Bluray" (odliší od web-ripu v katalogu).
+  const release = form.isBD ? 'Bluray' : sub.release;
   return saveSubFile({ ...sub, group_name: grp, release }, buf, rawName);
 }
