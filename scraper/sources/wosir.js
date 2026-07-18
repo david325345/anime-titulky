@@ -106,17 +106,33 @@ export async function download(sub) {
   const id = fileIdFrom(sub.url);
   if (!id) throw new Error(`wosir: z odkazu nejde vyčíst id (${sub.url}).`);
 
+  // Hiyori dává odkaz bez www (wosir.cz/download.php?id=…). Ten dělá 301 na
+  // www.wosir.cz, a při tom cross-domain redirectu se ZTRATÍ session cookie
+  // → wosir nás bere jako nepřihlášené a hodí na /index1. Proto na www
+  // přepneme rovnou, ať k redirectu vůbec nedojde.
+  const startUrl = sub.url.replace(/^https?:\/\/(?:www\.)?wosir\.cz/i, 'https://www.wosir.cz');
+
   let cookie = await ensureSession();
 
-  // 1) odkaz z hiyori → přesměruje na stránku anime
-  let r = await agentFetch(sub.url, { cookie, follow: true });
+  // příznak: přistáli jsme na stránce anime? (přihlášená session tam přesměruje)
+  const landedOnAnime = (resp) => /\/anime\?id=/i.test(resp.effectiveUrl || '');
 
-  // session mohla vypršet → zkus jednou znovu přihlásit
-  if (r.status === 200 && /P.ihl.šen. u.ivatele|name="csrf_token"/i.test(r.buf.toString('utf8').slice(0, 3000))) {
+  // 1) odkaz z hiyori → má přesměrovat na stránku anime
+  let r = await agentFetch(startUrl, { cookie, follow: true });
+
+  // Když nás to hodilo na index1 / přihlašovací stránku (ne na anime),
+  // session vypršela → přihlas se jednou znovu a zopakuj.
+  if (!landedOnAnime(r)) {
     cookie = await login();
-    r = await agentFetch(sub.url, { cookie, follow: true });
+    r = await agentFetch(startUrl, { cookie, follow: true });
   }
   if (r.status !== 200) throw new Error(`wosir: HTTP ${r.status} (${sub.url}).`);
+  if (!landedOnAnime(r)) {
+    throw new Error(
+      `wosir: po přihlášení nás to nepřesměrovalo na stránku anime ` +
+      `(skončili jsme na ${r.effectiveUrl}). Zkontroluj přihlášení nebo id=${id}.`
+    );
+  }
 
   const pageUrl = r.effectiveUrl; // …/anime?id=5561
   const $ = cheerio.load(r.buf.toString('utf8'));
