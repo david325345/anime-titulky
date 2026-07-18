@@ -69,6 +69,65 @@ export async function liveDbGzip() {
   return { buffer: await gzip(raw), raw_bytes: raw.length };
 }
 
+const gunzip = promisify(zlib.gunzip);
+
+// Obnova DB z nahraného souboru (.db nebo .db.gz).
+// Určeno hlavně pro případ KORUPCE DB — nahradí /data/hiyori.db zálohou.
+// Postup: rozbal (když gz) → ověř že je platná SQLite se správnými tabulkami
+// → safety kopie současné DB → přepiš → (volající pak restartuje službu).
+export async function restoreDbFromBuffer(uploaded) {
+  if (!uploaded || !uploaded.length) throw new Error('Prázdný soubor.');
+
+  // 1) rozbal, pokud je gzip (magie 1f 8b)
+  let raw = uploaded;
+  if (uploaded[0] === 0x1f && uploaded[1] === 0x8b) {
+    raw = await gunzip(uploaded);
+  }
+
+  // 2) je to SQLite? (hlavička "SQLite format 3\0")
+  const magic = raw.slice(0, 16).toString('utf8');
+  if (!magic.startsWith('SQLite format 3')) {
+    throw new Error('Nahraný soubor není SQLite databáze.');
+  }
+
+  // 3) ověř integritu + očekávané tabulky na DOČASNÉ kopii (neotvíráme živou)
+  const tmp = path.join(os.tmpdir(), `hiyori-restore-${Date.now()}.db`);
+  fs.writeFileSync(tmp, raw);
+  try {
+    const Database = (await import('better-sqlite3')).default;
+    const test = new Database(tmp, { readonly: true });
+    const integrity = test.pragma('integrity_check', { simple: true });
+    const tables = test
+      .prepare("SELECT name FROM sqlite_master WHERE type='table'")
+      .all()
+      .map((r) => r.name);
+    test.close();
+    if (integrity !== 'ok') throw new Error(`Záloha je poškozená (integrity: ${integrity}).`);
+    for (const need of ['subs', 'anime_map', 'meta']) {
+      if (!tables.includes(need)) {
+        throw new Error(`Záloha nemá tabulku '${need}' — nevypadá jako DB této služby.`);
+      }
+    }
+  } finally {
+    try { fs.unlinkSync(tmp); } catch {}
+  }
+
+  // 4) safety kopie současné DB (i kdyby byla rozbitá) — pro jistotu
+  try {
+    if (fs.existsSync(dbPath)) {
+      fs.copyFileSync(dbPath, `${dbPath}.before-restore-${Date.now()}`);
+    }
+  } catch {}
+
+  // 5) přepiš živou DB + ukliď WAL/SHM (aby se nemíchaly se starým stavem)
+  fs.writeFileSync(dbPath, raw);
+  for (const ext of ['-wal', '-shm']) {
+    try { fs.unlinkSync(dbPath + ext); } catch {}
+  }
+
+  return { raw_bytes: raw.length };
+}
+
 // Naplánuje denní zálohu na noční hodinu (BACKUP_HOUR). NEspouští po startu
 // (restartů může být za den víc) — čeká na nejbližší BACKUP_HOUR, pak každých 24 h.
 export function startDbBackup(log = console.log) {

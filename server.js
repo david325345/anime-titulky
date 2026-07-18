@@ -13,7 +13,7 @@ import * as hanabi from './scraper/sources/hanabi.js';
 import { saveSubFile } from './scraper/download.js';
 import AdmZip from 'adm-zip';
 import { r2PublicUrl, r2Get, r2Delete } from './r2.js';
-import { liveDbGzip, backupDbToR2, startDbBackup } from './backup.js';
+import { liveDbGzip, backupDbToR2, startDbBackup, restoreDbFromBuffer } from './backup.js';
 import zlib from 'node:zlib';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -171,6 +171,33 @@ app.post('/api/backup/run', requireUser1, async (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+
+// obnova DB ze zálohy (.db nebo .db.gz). Hlavně pro případ KORUPCE DB.
+// Ověří platnost, udělá safety kopii, přepíše /data/hiyori.db a RESTARTUJE
+// službu (Coolify ji nahodí zpět s čistou DB). Jen user1.
+app.post('/api/backup/restore',
+  requireUser1,
+  express.raw({ type: '*/*', limit: '50mb' }),
+  async (req, res) => {
+    if (!req.body || !req.body.length) {
+      return res.status(400).json({ ok: false, error: 'Prázdný soubor.' });
+    }
+    try {
+      const r = await restoreDbFromBuffer(req.body);
+      // odpověz PŘED restartem (klient uvidí úspěch), pak se ukonči
+      res.json({
+        ok: true,
+        raw_bytes: r.raw_bytes,
+        restarting: true,
+        message: 'DB obnovena. Služba se restartuje (~10 s).',
+      });
+      console.log('[restore] DB obnovena ze zálohy — restartuji službu.');
+      setTimeout(() => process.exit(0), 500); // Coolify nahodí zpět
+    } catch (e) {
+      res.status(400).json({ ok: false, error: e.message });
+    }
+  }
+);
 
 app.use(express.static(path.join(__dirname, 'public')));
 
