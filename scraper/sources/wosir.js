@@ -88,18 +88,26 @@ function fileIdFrom(url) {
   return m ? m[1] : null;
 }
 
-// Najde ve stránce anime formulář s daným hiddenid → { fileToDownload }.
-export function findFormByHiddenId($, id) {
-  let hit = null;
-  $('form.form-test, form').each((_, f) => {
-    if (hit) return;
-    const $f = $(f);
-    const hidden = $f.find('input[name="hiddenid"]').attr('value');
-    if (String(hidden || '').trim() !== String(id)) return;
-    const file = $f.find('input[name="file_to_download"]').attr('value');
-    if (file) hit = { fileToDownload: file.trim() };
-  });
-  return hit;
+// Najde ve stránce anime formulář s daným hiddenid. wosir má ROZBITÉ vnořené
+// HTML (</td></td>, formuláře přes sebe), na kterém cheerio nespáruje hiddenid
+// s file_to_download → hledáme regexem v syrovém HTML.
+// Rozlišuje BD verzi (file_to_download_BD + dwl_bd) od běžné (file_to_download + dwl).
+// Vrací { fileToDownload, isBD, fileField, dwlField }.
+export function findFormByHiddenId(html, id) {
+  const hiRe = new RegExp('name="hiddenid"\\s+value="' + id + '"');
+  const m = hiRe.exec(html);
+  if (!m) return null;
+  const formStart = html.lastIndexOf('<form', m.index);
+  if (formStart < 0) return null;
+  const block = html.slice(formStart, m.index + 40);
+
+  const isBD = /name="file_to_download_BD"/.test(block);
+  const fileField = isBD ? 'file_to_download_BD' : 'file_to_download';
+  const dwlField = isBD ? 'dwl_bd' : 'dwl';
+  const fileRe = new RegExp('name="' + fileField + '"\\s+value="([^"]+)"');
+  const file = (block.match(fileRe) || [])[1];
+  if (!file) return null;
+  return { fileToDownload: file.trim(), isBD, fileField, dwlField };
 }
 
 export async function download(sub) {
@@ -135,19 +143,19 @@ export async function download(sub) {
   }
 
   const pageUrl = r.effectiveUrl; // …/anime?id=5561
-  const $ = cheerio.load(r.buf.toString('utf8'));
+  const html = r.buf.toString('utf8');
 
-  // 2) najdi náš řádek podle hiddenid
-  const form = findFormByHiddenId($, id);
+  // 2) najdi náš řádek podle hiddenid (regex — cheerio nezvládá rozbité HTML)
+  const form = findFormByHiddenId(html, id);
   if (!form) {
     throw new Error(`wosir: na stránce ${pageUrl} není titulek s id=${id}.`);
   }
 
-  // 3) POST → .ass (stejně jako to dělá prohlížeč, ať se započítá stažení)
+  // 3) POST → .ass. BD verze posílá jiná pole (file_to_download_BD + dwl_bd).
   const body = new URLSearchParams({
-    file_to_download: form.fileToDownload,
+    [form.fileField]: form.fileToDownload,
     hiddenid: id,
-    dwl: 'Stáhnout',
+    [form.dwlField]: form.isBD ? 'Stáhnout BD' : 'Stáhnout',
   }).toString();
 
   const d = await agentFetch(pageUrl, { method: 'POST', body, cookie, follow: true });
@@ -159,12 +167,17 @@ export async function download(sub) {
     throw new Error('wosir: download nevrátil titulek (HTML stránka — vypršela session?).');
   }
 
-  // 4) jméno souboru
+  // 4) jméno souboru + release (BD verzi označíme)
   const rawName =
     filenameFromHeaders(d.headers) ||
     form.fileToDownload.split('/').pop() ||
     `wosir-ep${sub.episode}.ass`;
 
   const grp = sub.group_name || 'WoŠir';
-  return saveSubFile({ ...sub, group_name: grp }, buf, rawName);
+  // BD verzi označíme v release (ať se odliší od web-ripu v katalogu).
+  // Když už release z hiyori existuje, přidáme "BD"; jinak "BD" samotné.
+  const release = form.isBD
+    ? (sub.release ? `${sub.release} (BD)` : 'BD')
+    : sub.release;
+  return saveSubFile({ ...sub, group_name: grp, release }, buf, rawName);
 }
