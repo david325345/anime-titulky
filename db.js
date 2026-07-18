@@ -5,7 +5,7 @@ import path from 'node:path';
 import { CONFIG } from './config.js';
 
 fs.mkdirSync(CONFIG.dataDir, { recursive: true });
-const dbPath = path.join(CONFIG.dataDir, 'hiyori.db');
+export const dbPath = path.join(CONFIG.dataDir, 'hiyori.db');
 
 export const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');

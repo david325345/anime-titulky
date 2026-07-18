@@ -72,3 +72,32 @@ export async function r2Delete(key) {
   const t = await res.text().catch(() => '');
   throw new Error(`R2 DELETE ${res.status}: ${t.slice(0, 200)}`);
 }
+
+// vylistuje klíče pod prefixem → [{ key, size, lastModified }]. Stránkuje.
+export async function r2List(prefix) {
+  const c = getClient();
+  if (!c) return [];
+  const out = [];
+  let token = null;
+  do {
+    const u = new URL(`https://${CONFIG.r2.accountId}.r2.cloudflarestorage.com/${CONFIG.r2.bucket}`);
+    u.searchParams.set('list-type', '2');
+    u.searchParams.set('prefix', prefix);
+    u.searchParams.set('max-keys', '1000');
+    if (token) u.searchParams.set('continuation-token', token);
+    const res = await c.fetch(u.toString());
+    if (!res.ok) throw new Error(`R2 LIST ${res.status}`);
+    const xml = await res.text();
+    const dec = (s) => s.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+    for (const m of xml.matchAll(/<Contents>([\s\S]*?)<\/Contents>/g)) {
+      const block = m[1];
+      const key = dec((block.match(/<Key>([^<]+)<\/Key>/) || [])[1] || '');
+      const size = Number((block.match(/<Size>(\d+)<\/Size>/) || [])[1] || 0);
+      const lastModified = (block.match(/<LastModified>([^<]+)<\/LastModified>/) || [])[1] || '';
+      if (key) out.push({ key, size, lastModified });
+    }
+    const t = xml.match(/<NextContinuationToken>([^<]+)<\/NextContinuationToken>/);
+    token = t ? t[1] : null;
+  } while (token);
+  return out;
+}
