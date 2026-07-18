@@ -78,7 +78,7 @@ export async function ingestAnime(hiyoriId, card = {}, { onlyEpisodes = null } =
 // ani s hns variantami 700M; stejný díl 2× nevytvoří duplicitu).
 const MANUAL_ID_BASE = 900000000;
 
-export async function addManualEpisodes(hiyoriId, { epFrom, epTo, lang, group }) {
+export async function addManualEpisodes(hiyoriId, { epFrom, epTo, lang, group, release }) {
   const detail = await getDetail(hiyoriId);
   upsertAnime({
     hiyori_id: hiyoriId,
@@ -106,7 +106,7 @@ export async function addManualEpisodes(hiyoriId, { epFrom, epTo, lang, group })
       lang: lang || 'CZ',
       group_id: null,
       group_name: group || null,
-      release: null,
+      release: release || null,
       version: null,
       kind: 'manual',
       url: null,
