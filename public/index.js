@@ -8,6 +8,9 @@ import * as kamui from './kamui.js';
 import * as underkotatsu from './underkotatsu.js';
 import * as hanabi from './hanabi.js';
 import * as hajimarisubs from './hajimarisubs.js';
+import * as ange3mka from './ange3mka.js';
+import * as gensubs from './gensubs.js';
+import * as legiekondor from './legiekondor.js';
 
 const SOURCES = {
   'wosir.cz': wosir,
@@ -17,6 +20,9 @@ const SOURCES = {
   'underkotatsusubs.cz': underkotatsu,
   'hanabi.fan': hanabi,
   'hajimarisubs.net': hajimarisubs,
+  'ange.3mka.cz': ange3mka,
+  'gensubs.cz': gensubs,
+  'anime4.legiekondor.cz': legiekondor,
   // 'dalsi-web.cz': dalsiModul,
 };
 
