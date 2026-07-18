@@ -7,6 +7,9 @@ async function loadRole() {
   try {
     const r = await (await fetch('/api/whoami')).json();
     canDelete = !!r.can_delete;
+    // záloha DB jen pro hlavní účet (obsahuje kompletní evidenci)
+    const bb = $('#backupBtn');
+    if (bb && r.role !== 'user2') bb.style.display = '';
   } catch { canDelete = true; }
 }
 
@@ -144,6 +147,11 @@ $('#dlBtn').addEventListener('click', async () => {
   $('#dlBtn').disabled = true;
   await fetch('/api/download-only', { method: 'POST' });
   setTimeout(load, 800);
+});
+
+$('#backupBtn').addEventListener('click', () => {
+  // prohlížeč stáhne soubor přímo z endpointu (gzip DB)
+  window.location.href = '/api/backup/download';
 });
 
 async function addAnime() {
