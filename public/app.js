@@ -57,6 +57,10 @@ function renderSubs(subs) {
     const uploadBtn = s.status !== 'downloaded'
       ? `<button class="upload-sub" data-id="${s.sub_id}" title="Nahrát titulek ručně (.ass/.srt/.zip)">📤</button>`
       : '';
+    // stáhnout právě tenhle záznam teď (jen u nestažených)
+    const dlNowBtn = s.status !== 'downloaded'
+      ? `<button class="dl-one" data-id="${s.sub_id}" title="Stáhnout tento titulek teď">⬇</button>`
+      : '';
     const onR2 = s.r2_key
       ? `<span class="pill r2-yes" title="${esc(s.r2_key)}">✓</span>`
       : `<span class="r2-no">—</span>`;
@@ -71,7 +75,7 @@ function renderSubs(subs) {
       <td class="nowrap">${statusCell(s)}</td>
       <td class="nowrap">${onR2}</td>
       <td class="nowrap">${dl}</td>
-      <td class="nowrap">${uploadBtn}<button class="del" data-id="${s.sub_id}" title="Smazat záznam (na R2 zůstává)">✕</button></td>
+      <td class="nowrap">${dlNowBtn}${uploadBtn}<button class="del" data-id="${s.sub_id}" title="Smazat záznam (na R2 zůstává)">✕</button></td>
     </tr>`;
   }).join('') || `<tr><td colspan="11" class="muted">Nic nenalezeno.</td></tr>`;
 }
@@ -239,6 +243,31 @@ $('#subsTable').addEventListener('click', async (e) => {
     } catch (err) {
       alert('Chyba: ' + err.message);
       hb.disabled = false; hb.textContent = '🔗 odkaz';
+    }
+    return;
+  }
+
+  // stáhnout tento jeden titulek teď
+  const dlBtn = e.target.closest('button.dl-one');
+  if (dlBtn) {
+    const id = dlBtn.dataset.id;
+    const orig = dlBtn.textContent;
+    dlBtn.disabled = true;
+    dlBtn.textContent = '⏳';
+    try {
+      const r = await (await fetch(`/api/download-sub/${id}`, { method: 'POST' })).json();
+      if (r.ok) {
+        loadSubs();
+        loadOverview();
+      } else {
+        alert('Nestáhlo se: ' + (r.error || 'neznámá chyba'));
+        dlBtn.disabled = false;
+        dlBtn.textContent = orig;
+      }
+    } catch (err) {
+      alert('Chyba: ' + err.message);
+      dlBtn.disabled = false;
+      dlBtn.textContent = orig;
     }
     return;
   }
