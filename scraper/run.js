@@ -18,7 +18,7 @@ export const isRunning = () => running;
 // onlyEpisodes = Set čísel epizod → uloží jen ty díly (automatický scrape z feedu).
 // onlyEpisodes = null/prázdné → uloží celou tabulku (ruční přidání přes URL).
 // Vrací { found, added, title, anilistId, malId }.
-export async function ingestAnime(hiyoriId, card = {}, { onlyEpisodes = null } = {}) {
+export async function ingestAnime(hiyoriId, card = {}, { onlyEpisodes = null, manualAdd = false } = {}) {
   const detail = await getDetail(hiyoriId);
   upsertAnime({
     hiyori_id: hiyoriId,
@@ -53,6 +53,7 @@ export async function ingestAnime(hiyoriId, card = {}, { onlyEpisodes = null } =
       extern_domain: row.extern_domain,
       added_date: row.added_date || card.addedDate,
       first_seen: new Date().toISOString(),
+      manual_add: manualAdd ? 1 : 0,
       status:
         row.kind === 'direct'
           ? CONFIG.downloadEnabled ? 'new' : 'not_downloaded'
