@@ -149,6 +149,18 @@ export const setReleaseIfEmpty = (sub_id, release) =>
 const _setRelease = db.prepare('UPDATE subs SET release=@release WHERE sub_id=@sub_id');
 export const setRelease = (sub_id, release) => _setRelease.run({ sub_id, release });
 
+// editace popisných metadat z webu (Fansub / Release / Jazyk) — nemění Ep ani Zdroj
+const _updateSubMeta = db.prepare(
+  'UPDATE subs SET group_name=@group_name, release=@release, lang=@lang WHERE sub_id=@sub_id'
+);
+export const updateSubMeta = (sub_id, { group_name, release, lang }) =>
+  _updateSubMeta.run({
+    sub_id,
+    group_name: group_name ?? null,
+    release: release ?? null,
+    lang: lang ?? null,
+  }).changes;
+
 // --- runs ---
 const _startRun = db.prepare(
   'INSERT INTO runs(started_at,ok) VALUES(?,0)'

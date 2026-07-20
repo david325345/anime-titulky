@@ -7,7 +7,7 @@ import { CONFIG } from './config.js';
 import { runOnce, downloadOnce, downloadSingle, isRunning, ingestAnime, addManualEpisodes } from './scraper/run.js';
 import {
   overviewCounts, recentSubs, recentRuns, getMeta, getSub, findSubs, subsAvailability,
-  listSubs, deleteSub, recentlyAdded, markDownloaded, allSubs,
+  listSubs, deleteSub, recentlyAdded, markDownloaded, allSubs, updateSubMeta,
 } from './db.js';
 import * as hanabi from './scraper/sources/hanabi.js';
 import { saveSubFile } from './scraper/download.js';
@@ -255,6 +255,26 @@ app.delete('/api/sub/:subId', requireUser1, async (req, res) => {
   }
   const n = deleteSub(subId);
   res.json({ deleted: n > 0, r2_deleted: r2Deleted });
+});
+
+// editace popisných metadat (Fansub / Release / Jazyk). Nemění Ep ani Zdroj,
+// takže stahování se nerozbije. Jen user1.
+app.patch('/api/sub/:subId', requireUser1, express.json(), (req, res) => {
+  const subId = Number(req.params.subId);
+  if (!getSub(subId)) return res.status(404).json({ ok: false, error: 'Záznam nenalezen.' });
+  const { group_name, release, lang } = req.body || {};
+  // prázdný string → null (vyprázdnění pole je legitimní)
+  const norm = (v) => {
+    if (v == null) return null;
+    const t = String(v).trim();
+    return t === '' ? null : t;
+  };
+  const n = updateSubMeta(subId, {
+    group_name: norm(group_name),
+    release: norm(release),
+    lang: norm(lang),
+  });
+  res.json({ ok: n > 0 });
 });
 
 // (pře)plánování hodinového intervalu — resetuje se při každém ručním spuštění.
