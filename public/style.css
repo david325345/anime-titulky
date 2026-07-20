@@ -130,3 +130,27 @@ button.del-r2:disabled { opacity: .4; cursor: default; }
 .dot.ok { background: var(--ok); } .dot.bad { background: var(--err); } .dot.run { background: var(--accent); }
 
 @media (max-width: 780px) { .cards { grid-template-columns: repeat(2, 1fr); } }
+/* editační modal (tužka u záznamu) */
+.edit-modal-overlay {
+  position: fixed; inset: 0; z-index: 50;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex; align-items: center; justify-content: center;
+}
+.edit-modal {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  padding: 22px 24px; width: 340px; max-width: 90vw;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+.edit-modal h3 { margin: 0 0 16px; font-size: 17px; color: var(--text); }
+.edit-modal label {
+  display: block; margin-bottom: 12px; font-size: 13px; color: var(--muted);
+}
+.edit-modal input {
+  display: block; width: 100%; margin-top: 5px; padding: 8px 10px;
+  background: var(--bg2); border: 1px solid var(--line); border-radius: 6px;
+  color: var(--text); font-size: 14px; box-sizing: border-box;
+}
+.edit-modal input:focus { outline: none; border-color: var(--accent); }
+.edit-modal-actions {
+  display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px;
+}

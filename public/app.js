@@ -89,7 +89,7 @@ function renderSubs(subs) {
       <td class="nowrap">${statusCell(s)}</td>
       <td class="nowrap">${onR2}</td>
       <td class="nowrap">${dl}</td>
-      <td class="nowrap">${dlNowBtn}${uploadBtn}${canDelete ? `<button class="del" data-id="${s.sub_id}" title="Smazat záznam z DB (na R2 zůstává)">✖</button>` : ''}${(canDelete && s.r2_key) ? `<button class="del-r2" data-id="${s.sub_id}" title="Smazat úplně (DB i soubor na R2)">🗑</button>` : ''}</td>
+      <td class="nowrap">${dlNowBtn}${uploadBtn}${canDelete ? `<button class="edit-sub" data-id="${s.sub_id}" data-group="${esc(s.group_name || '')}" data-release="${esc(s.release || '')}" data-lang="${esc(s.lang || '')}" title="Upravit fansub / release / jazyk">✏️</button>` : ''}${canDelete ? `<button class="del" data-id="${s.sub_id}" title="Smazat záznam z DB (na R2 zůstává)">✖</button>` : ''}${(canDelete && s.r2_key) ? `<button class="del-r2" data-id="${s.sub_id}" title="Smazat úplně (DB i soubor na R2)">🗑</button>` : ''}</td>
     </tr>`;
   }).join('') || `<tr><td colspan="11" class="muted">Nic nenalezeno.</td></tr>`;
 }
@@ -264,7 +264,70 @@ $('#searchInput').addEventListener('input', (e) => {
 });
 
 // mazání (delegace na tabulce)
+// modal pro editaci metadat (jeden formulář: Fansub, Release, Jazyk)
+function openEditModal(ed) {
+  const id = ed.dataset.id;
+  // odstraň případný předchozí
+  document.getElementById('editModal')?.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'editModal';
+  overlay.className = 'edit-modal-overlay';
+  overlay.innerHTML = `
+    <div class="edit-modal">
+      <h3>Upravit titulek</h3>
+      <label>Fansub (skupina)
+        <input type="text" id="edit-group" value="${esc(ed.dataset.group || '')}" placeholder="např. HorribelSubs" />
+      </label>
+      <label>Release
+        <input type="text" id="edit-release" value="${esc(ed.dataset.release || '')}" placeholder="např. SubsPlease, Bluray" />
+      </label>
+      <label>Jazyk
+        <input type="text" id="edit-lang" value="${esc(ed.dataset.lang || '')}" placeholder="CZ / SK" maxlength="4" />
+      </label>
+      <div class="edit-modal-actions">
+        <button type="button" class="btn-secondary" id="edit-cancel">Zrušit</button>
+        <button type="button" id="edit-save">Uložit</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  const close = () => overlay.remove();
+  overlay.addEventListener('click', (ev) => { if (ev.target === overlay) close(); });
+  document.getElementById('edit-cancel').addEventListener('click', close);
+  document.getElementById('edit-group').focus();
+
+  document.getElementById('edit-save').addEventListener('click', async () => {
+    const saveBtn = document.getElementById('edit-save');
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Ukládám…';
+    try {
+      const r = await (await fetch(`/api/sub/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          group_name: document.getElementById('edit-group').value.trim(),
+          release: document.getElementById('edit-release').value.trim(),
+          lang: document.getElementById('edit-lang').value.trim().toUpperCase(),
+        }),
+      })).json();
+      if (r.ok) { close(); loadSubs(); }
+      else {
+        alert('Úprava selhala: ' + (r.error || 'neznámá chyba'));
+        saveBtn.disabled = false; saveBtn.textContent = 'Uložit';
+      }
+    } catch (err) {
+      alert('Chyba: ' + err.message);
+      saveBtn.disabled = false; saveBtn.textContent = 'Uložit';
+    }
+  });
+}
+
 $('#subsTable').addEventListener('click', async (e) => {
+  // editace metadat — tužka → modal
+  const ed = e.target.closest('button.edit-sub');
+  if (ed) { openEditModal(ed); return; }
+
   // ruční nahrání titulku — otevři file dialog
   const up = e.target.closest('button.upload-sub');
   if (up) {
