@@ -43,6 +43,9 @@ button:disabled { opacity: .5; cursor: default; }
 .dl-one { background: #2a3f5a; border: 1px solid #4a6c9c; color: #c4dcff; padding: 3px 8px; font-size: 13px; border-radius: 6px; cursor: pointer; margin-right: 4px; }
 .dl-one:hover { filter: brightness(1.2); }
 .dl-one:disabled { opacity: .5; cursor: default; }
+.edit-sub { background: #3a3320; border: 1px solid #7c6a3a; color: #ffe8c4; padding: 3px 8px; font-size: 13px; border-radius: 6px; cursor: pointer; margin-right: 4px; }
+.edit-sub:hover { filter: brightness(1.2); }
+.edit-sub:disabled { opacity: .5; cursor: default; }
 .muted { color: var(--muted); }
 
 main { padding: 22px; max-width: 1200px; margin: 0 auto; }
