@@ -475,3 +475,103 @@ export function subsAvailability({ anilist = null, mal = null, episode = null })
     episodes_count: 0, subs_total: 0, langs: [], episodes: [],
   };
 }
+
+// ==================================================================
+// AKIHABARA ARCHIV (read-only) — funkce pro webovou sekci
+// ==================================================================
+
+// Seznam anime v akihabara archivu, seskupený (1 anime = 1 řádek).
+// Podporuje hledání podle názvu (q) + stránkování. Vrací počet dílů,
+// jazyky a skupiny per anime.
+export function listAkihabaraAnime({ limit = 100, offset = 0, q = null } = {}) {
+  if (!akiDb) return { rows: [], total: 0 };
+  const like = q ? `%${q}%` : null;
+  const where = q ? "WHERE anime_title LIKE @like" : "";
+
+  try {
+    // celkový počet anime (pro stránkování)
+    const total = akiDb
+      .prepare(
+        `SELECT COUNT(*) c FROM (SELECT anilist_id FROM subs ${where} GROUP BY anilist_id)`
+      )
+      .get(q ? { like } : {}).c;
+
+    // stránka anime + agregace
+    const rows = akiDb
+      .prepare(
+        "SELECT anilist_id, mal_id, " +
+        "MAX(anime_title) AS anime_title, " +
+        "COUNT(DISTINCT episode) AS episodes_count, " +
+        "COUNT(*) AS subs_total, " +
+        "GROUP_CONCAT(DISTINCT lang) AS langs, " +
+        "GROUP_CONCAT(DISTINCT group_name) AS groups " +
+        `FROM subs ${where} ` +
+        "GROUP BY anilist_id " +
+        "ORDER BY anime_title " +
+        "LIMIT @limit OFFSET @offset"
+      )
+      .all(q ? { like, limit, offset } : { limit, offset });
+
+    // uprav agregované sloupce (langs/groups CSV → pole, očisti null)
+    const clean = rows.map((r) => ({
+      anilist_id: r.anilist_id,
+      mal_id: r.mal_id,
+      anime_title: r.anime_title,
+      episodes_count: r.episodes_count,
+      subs_total: r.subs_total,
+      langs: (r.langs || '').split(',').filter(Boolean).sort(),
+      groups: (r.groups || '').split(',').filter(Boolean).sort(),
+    }));
+
+    return { rows: clean, total };
+  } catch (e) {
+    console.error('[akihabara] listAkihabaraAnime chyba:', e.message);
+    return { rows: [], total: 0 };
+  }
+}
+
+// Detail jednoho anime z archivu — jednotlivé díly a jejich titulky
+// (pro rozbalení řádku ve webové sekci).
+export function akihabaraAnimeDetail(anilistId) {
+  if (!akiDb) return { episodes: [] };
+  try {
+    const rows = akiDb
+      .prepare(
+        "SELECT episode, lang, group_name, release, filename " +
+        "FROM subs WHERE anilist_id=@id AND r2_key IS NOT NULL AND r2_key<>'' " +
+        "ORDER BY episode, lang, group_name"
+      )
+      .all({ id: anilistId });
+
+    // seskup po epizodě
+    const epMap = new Map();
+    for (const r of rows) {
+      if (!epMap.has(r.episode)) epMap.set(r.episode, []);
+      epMap.get(r.episode).push({
+        lang: r.lang,
+        group: r.group_name,
+        release: r.release,
+      });
+    }
+    const episodes = [...epMap.entries()]
+      .map(([ep, subs]) => ({ episode: ep, subs }))
+      .sort((a, b) => (a.episode ?? 0) - (b.episode ?? 0));
+
+    return { episodes };
+  } catch (e) {
+    console.error('[akihabara] akihabaraAnimeDetail chyba:', e.message);
+    return { episodes: [] };
+  }
+}
+
+// Souhrn archivu pro hlavičku sekce (počet titulků + anime).
+export function akihabaraStats() {
+  if (!akiDb) return { subs: 0, anime: 0, enabled: false };
+  try {
+    const subs = akiDb.prepare('SELECT COUNT(*) c FROM subs').get().c;
+    const anime = akiDb.prepare('SELECT COUNT(DISTINCT anilist_id) c FROM subs').get().c;
+    return { subs, anime, enabled: true };
+  } catch {
+    return { subs: 0, anime: 0, enabled: false };
+  }
+}
