@@ -215,12 +215,36 @@ export const overviewCounts = () => {
     } catch { aki = 0; }
   }
 
+  // počet UNIKÁTNÍCH anime napříč zdroji (stejné anilist_id = jedno anime).
+  // Spojíme anilist_id z hiyori + archivu do jedné množiny.
+  const animeSet = new Set();
+  try {
+    for (const r of db.prepare(
+      "SELECT DISTINCT anilist_id FROM subs WHERE anilist_id IS NOT NULL AND r2_key IS NOT NULL AND r2_key<>''"
+    ).all()) animeSet.add('al:' + r.anilist_id);
+    // hiyori titulky bez anilist ale s mal
+    for (const r of db.prepare(
+      "SELECT DISTINCT mal_id FROM subs WHERE anilist_id IS NULL AND mal_id IS NOT NULL AND r2_key IS NOT NULL AND r2_key<>''"
+    ).all()) animeSet.add('mal:' + r.mal_id);
+  } catch {}
+  if (akiDb) {
+    try {
+      for (const r of akiDb.prepare(
+        "SELECT DISTINCT anilist_id FROM subs WHERE anilist_id IS NOT NULL AND r2_key IS NOT NULL AND r2_key<>''"
+      ).all()) animeSet.add('al:' + r.anilist_id);
+      for (const r of akiDb.prepare(
+        "SELECT DISTINCT mal_id FROM subs WHERE anilist_id IS NULL AND mal_id IS NOT NULL AND r2_key IS NOT NULL AND r2_key<>''"
+      ).all()) animeSet.add('mal:' + r.mal_id);
+    } catch {}
+  }
+
   return {
     total: (h.total || 0) + aki,
     downloaded: (h.downloaded || 0) + aki,
     extern_pending: h.extern_pending || 0,
     failed: h.failed || 0,
     on_r2: (h.on_r2 || 0) + aki,
+    anime: animeSet.size,   // unikátních anime napříč zdroji
     hiyori: h.total || 0,   // rozpad pro případ, že by ho web chtěl
     akihabara: aki,
   };
