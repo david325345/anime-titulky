@@ -157,3 +157,13 @@ button.del-r2:disabled { opacity: .4; cursor: default; }
 .edit-modal-actions {
   display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px;
 }
+
+/* Akihabara archiv */
+.aki-anime { cursor: pointer; }
+.aki-anime:hover { background: rgba(255,255,255,0.03); }
+.aki-arrow { width: 1.5em; text-align: center; color: var(--muted, #888); user-select: none; }
+.aki-groups { font-size: 0.9em; color: var(--muted, #888); }
+.aki-detail-cell { padding: 0.5em 1em; background: rgba(0,0,0,0.15); }
+.aki-eps { display: flex; flex-direction: column; gap: 0.25em; font-size: 0.9em; }
+.aki-ep { line-height: 1.4; }
+.aki-ep b { color: var(--accent, #6cf); margin-right: 0.3em; }

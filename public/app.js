@@ -452,5 +452,115 @@ $('#subsTable').addEventListener('click', async (e) => {
   } catch (e) { btn.disabled = false; }
 });
 
+// ==================================================================
+// AKIHABARA ARCHIV (read-only sekce)
+// ==================================================================
+let akiPage = 1;
+let akiQuery = '';
+const akiExpanded = new Set(); // anilist_id rozbalených řádků
+
+async function loadAkihabara() {
+  try {
+    // souhrn do hlavičky (jen jednou stačí, ale levné)
+    const st = await (await fetch('/api/akihabara/stats')).json();
+    if (st.enabled) {
+      $('#akiCount').textContent = `(${st.subs} titulků / ${st.anime} anime, jen ke čtení)`;
+    } else {
+      $('#akiCount').textContent = '(archiv nedostupný)';
+    }
+
+    const url = `/api/akihabara/list?page=${akiPage}` + (akiQuery ? `&q=${encodeURIComponent(akiQuery)}` : '');
+    const d = await (await fetch(url)).json();
+    renderAkihabara(d.anime || []);
+
+    const from = d.total === 0 ? 0 : (d.page - 1) * d.per_page + 1;
+    const to = Math.min(d.page * d.per_page, d.total);
+    $('#akiPageInfo').textContent = `${from}–${to} z ${d.total}`;
+    $('#akiPrevBtn').disabled = d.page <= 1;
+    $('#akiNextBtn').disabled = d.page >= d.pages;
+  } catch (e) {
+    $('#akiTable tbody').innerHTML = '<tr><td colspan="5" class="muted">Archiv nedostupný.</td></tr>';
+  }
+}
+
+function renderAkihabara(anime) {
+  $('#akiTable tbody').innerHTML = anime.map((a) => {
+    const isOpen = akiExpanded.has(a.anilist_id);
+    const arrow = isOpen ? '▼' : '▶';
+    const langs = a.langs.join(', ');
+    const groups = a.groups.join(', ');
+    const mainRow =
+      `<tr class="aki-anime" data-id="${a.anilist_id}">` +
+      `<td class="aki-arrow">${arrow}</td>` +
+      `<td>${esc(a.anime_title)}</td>` +
+      `<td>${a.episodes_count}</td>` +
+      `<td>${esc(langs)}</td>` +
+      `<td class="aki-groups">${esc(groups)}</td>` +
+      `</tr>`;
+    // rozbalený detail (díly) — placeholder, naplní se async po kliknutí
+    const detailRow = isOpen
+      ? `<tr class="aki-detail" data-id="${a.anilist_id}"><td></td><td colspan="4" class="aki-detail-cell">Načítám…</td></tr>`
+      : '';
+    return mainRow + detailRow;
+  }).join('');
+
+  // dopočítej detaily rozbalených řádků
+  for (const id of akiExpanded) {
+    if (anime.some((a) => a.anilist_id === id)) loadAkiDetail(id);
+  }
+}
+
+async function loadAkiDetail(anilistId) {
+  const cell = document.querySelector(`tr.aki-detail[data-id="${anilistId}"] .aki-detail-cell`);
+  if (!cell) return;
+  try {
+    const d = await (await fetch(`/api/akihabara/detail?anilist=${anilistId}`)).json();
+    if (!d.episodes || !d.episodes.length) {
+      cell.innerHTML = '<span class="muted">Žádné díly.</span>';
+      return;
+    }
+    cell.innerHTML =
+      '<div class="aki-eps">' +
+      d.episodes.map((ep) => {
+        const variants = ep.subs.map((s) => {
+          const g = s.group ? ` [${esc(s.group)}]` : '';
+          const r = s.release ? ` · ${esc(s.release)}` : '';
+          return `${esc(s.lang)}${g}${r}`;
+        }).join(' · ');
+        const epLabel = ep.episode != null ? `Díl ${ep.episode}` : 'Film';
+        return `<div class="aki-ep"><b>${esc(epLabel)}:</b> ${variants}</div>`;
+      }).join('') +
+      '</div>';
+  } catch {
+    cell.innerHTML = '<span class="muted">Chyba načtení dílů.</span>';
+  }
+}
+
+// klik na řádek anime → rozbalit/sbalit
+$('#akiTable').addEventListener('click', (e) => {
+  const row = e.target.closest('tr.aki-anime');
+  if (!row) return;
+  const id = Number(row.dataset.id);
+  if (akiExpanded.has(id)) akiExpanded.delete(id);
+  else akiExpanded.add(id);
+  loadAkihabara();
+});
+
+// hledání v archivu (debounce)
+let akiSearchTimer;
+$('#akiSearch').addEventListener('input', (e) => {
+  clearTimeout(akiSearchTimer);
+  akiSearchTimer = setTimeout(() => {
+    akiQuery = e.target.value.trim();
+    akiPage = 1;
+    akiExpanded.clear();
+    loadAkihabara();
+  }, 300);
+});
+
+$('#akiPrevBtn').addEventListener('click', () => { if (akiPage > 1) { akiPage--; akiExpanded.clear(); loadAkihabara(); } });
+$('#akiNextBtn').addEventListener('click', () => { akiPage++; akiExpanded.clear(); loadAkihabara(); });
+
 loadRole().then(load);
+loadAkihabara();
 setInterval(loadOverview, 5000); // auto-refresh jen souhrn (netrhá stránkování/hledání)

@@ -66,6 +66,28 @@
     </section>
 
     <section class="panel">
+      <div class="panel-head">
+        <h2>Akihabara archiv <span id="akiCount" class="muted"></span></h2>
+        <input id="akiSearch" class="search" type="text" placeholder="Hledat v archivu…" />
+      </div>
+      <div class="table-wrap">
+        <table id="akiTable">
+          <thead>
+            <tr>
+              <th></th><th>Anime</th><th>Dílů</th><th>Jazyky</th><th>Skupiny</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="pager">
+        <button id="akiPrevBtn">‹ Předchozí</button>
+        <span id="akiPageInfo" class="muted">—</span>
+        <button id="akiNextBtn">Další ›</button>
+      </div>
+    </section>
+
+    <section class="panel">
       <h2>Historie běhů</h2>
       <div class="table-wrap">
         <table id="runsTable">
