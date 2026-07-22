@@ -8,6 +8,7 @@ import { runOnce, downloadOnce, downloadSingle, isRunning, ingestAnime, addManua
 import {
   overviewCounts, recentSubs, recentRuns, getMeta, getSub, findSubs, subsAvailability,
   listSubs, deleteSub, recentlyAdded, markDownloaded, allSubs, updateSubMeta,
+  listAkihabaraAnime, akihabaraAnimeDetail, akihabaraStats,
 } from './db.js';
 import * as hanabi from './scraper/sources/hanabi.js';
 import { saveSubFile } from './scraper/download.js';
@@ -235,6 +236,39 @@ app.get('/api/subs-list', (req, res) => {
     pages: Math.max(1, Math.ceil(total / perPage)),
     subs: rows,
   });
+});
+
+// ==================================================================
+// AKIHABARA ARCHIV (read-only) — seznam anime + detail dílů
+// ==================================================================
+
+// souhrn archivu (pro hlavičku sekce): počet titulků + anime
+app.get('/api/akihabara/stats', (req, res) => {
+  res.json(akihabaraStats());
+});
+
+// stránkovaný seznam anime v archivu, s hledáním:
+// /api/akihabara/list?page=1&q=fairy
+app.get('/api/akihabara/list', (req, res) => {
+  const perPage = 100;
+  const page = Math.max(1, Number(req.query.page) || 1);
+  const q = req.query.q ? String(req.query.q).trim() : null;
+  const { rows, total } = listAkihabaraAnime({ limit: perPage, offset: (page - 1) * perPage, q });
+  res.json({
+    page,
+    per_page: perPage,
+    total,
+    pages: Math.max(1, Math.ceil(total / perPage)),
+    anime: rows,
+  });
+});
+
+// detail jednoho anime — díly + titulky (pro rozbalení řádku)
+// /api/akihabara/detail?anilist=6702
+app.get('/api/akihabara/detail', (req, res) => {
+  const anilist = Number(req.query.anilist) || null;
+  if (!anilist) return res.status(400).json({ error: 'Zadej anilist.' });
+  res.json(akihabaraAnimeDetail(anilist));
 });
 
 // smazání záznamu (z DB; soubor na R2 zůstává)
