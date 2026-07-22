@@ -37,6 +37,7 @@ function renderStats(c, status) {
   const dotCls = status.running ? 'run' : 'ok';
   $('#stats').innerHTML = `
     <div class="card"><div class="k">Titulků celkem</div><div class="v">${c.total || 0}</div></div>
+    <div class="card"><div class="k">Anime celkem</div><div class="v">${c.anime || 0}</div></div>
     <div class="card"><div class="k">Staženo</div><div class="v">${c.downloaded || 0}</div></div>
     <div class="card"><div class="k">Na R2</div><div class="v">${c.on_r2 || 0}</div></div>
     <div class="card"><div class="k">Externí (čeká)</div><div class="v">${c.extern_pending || 0}</div></div>
