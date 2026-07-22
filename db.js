@@ -11,6 +11,25 @@ export const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
 db.pragma('busy_timeout = 8000');
 
+// akihabara.db — samostatný statický archiv (mrtvý web anime.akihabara.cz).
+// READ-ONLY: jen čteme, žádné zápisy. Když soubor chybí, akiDb = null a
+// všechny akihabara dotazy se přeskočí (služba běží dál jen s hiyori).
+export const akiDbPath = path.join(CONFIG.dataDir, 'akihabara.db');
+export let akiDb = null;
+try {
+  if (fs.existsSync(akiDbPath)) {
+    akiDb = new Database(akiDbPath, { readonly: true, fileMustExist: true });
+    akiDb.pragma('busy_timeout = 8000');
+    const n = akiDb.prepare('SELECT COUNT(*) c FROM subs').get().c;
+    console.log(`[akihabara] archiv připojen: ${n} titulků (read-only)`);
+  } else {
+    console.log('[akihabara] /data/akihabara.db nenalezen — archiv se přeskočí');
+  }
+} catch (e) {
+  console.error('[akihabara] chyba otevření archivu:', e.message);
+  akiDb = null;
+}
+
 db.exec(`
 CREATE TABLE IF NOT EXISTS meta (
   key   TEXT PRIMARY KEY,
@@ -234,6 +253,37 @@ export const pendingExternByDomain = () =>
 
 // lookup pro addon: stažené titulky (na R2) podle anilist NEBO mal + episode.
 // Přednost má anilist; když nic, zkusí mal. Vrací {matchedBy, rows}.
+// Titulky z akihabara archivu (read-only). Schéma se liší: akihabara_id místo
+// sub_id, nemá status/kind/hiyori_id. Aliasujeme na stejný tvar jako hiyori,
+// aby se řádky daly spojit a server je zpracoval jednotně.
+function findAkiSubs({ anilist = null, mal = null, episode = null, lang = null }) {
+  if (!akiDb) return [];
+  const langCond = lang ? ' AND UPPER(lang)=UPPER(@lang)' : '';
+  const epCond = episode != null ? ' AND episode=@episode' : '';
+  const base =
+    "SELECT akihabara_id AS sub_id, anilist_id, mal_id, anime_title, episode, lang, " +
+    "group_name, release, version, NULL AS kind, " +
+    "COALESCE(extern_domain,'akihabara') AS extern_domain, filename, file_bytes, r2_key " +
+    "FROM subs WHERE r2_key IS NOT NULL AND r2_key<>''";
+  try {
+    if (anilist) {
+      const rows = akiDb
+        .prepare(`${base} AND anilist_id=@anilist${epCond}${langCond} ORDER BY lang, group_name`)
+        .all({ anilist, episode, lang });
+      if (rows.length) return rows;
+    }
+    if (mal) {
+      const rows = akiDb
+        .prepare(`${base} AND mal_id=@mal${epCond}${langCond} ORDER BY lang, group_name`)
+        .all({ mal, episode, lang });
+      if (rows.length) return rows;
+    }
+  } catch (e) {
+    console.error('[akihabara] findAkiSubs chyba:', e.message);
+  }
+  return [];
+}
+
 export function findSubs({ anilist = null, mal = null, episode = null, lang = null }) {
   const langCond = lang ? ' AND UPPER(lang)=UPPER(@lang)' : '';
   const epCond = episode != null ? ' AND episode=@episode' : '';
@@ -242,17 +292,20 @@ export function findSubs({ anilist = null, mal = null, episode = null, lang = nu
     "release, version, kind, extern_domain, filename, file_bytes, r2_key " +
     "FROM subs WHERE status='downloaded' AND r2_key IS NOT NULL AND r2_key<>''";
 
+  // akihabara titulky pro tentýž dotaz (přidají se ZA hiyori)
+  const aki = findAkiSubs({ anilist, mal, episode, lang });
+
   if (anilist) {
     const rows = db
       .prepare(`${base} AND anilist_id=@anilist${epCond}${langCond} ORDER BY lang, group_name`)
       .all({ anilist, episode, lang });
-    if (rows.length) return { matchedBy: 'anilist', rows };
+    if (rows.length || aki.length) return { matchedBy: 'anilist', rows: [...rows, ...aki] };
   }
   if (mal) {
     const rows = db
       .prepare(`${base} AND mal_id=@mal${epCond}${langCond} ORDER BY lang, group_name`)
       .all({ mal, episode, lang });
-    if (rows.length) return { matchedBy: 'mal', rows };
+    if (rows.length || aki.length) return { matchedBy: 'mal', rows: [...rows, ...aki] };
   }
   return { matchedBy: null, rows: [] };
 }
@@ -351,19 +404,40 @@ export function subsAvailability({ anilist = null, mal = null, episode = null })
   const base =
     "FROM subs WHERE status='downloaded' AND r2_key IS NOT NULL AND r2_key<>''";
 
+  // akihabara varianty (read-only archiv) — přidají se ZA hiyori varianty
+  const akiRows = (idCol, id) => {
+    if (!akiDb) return [];
+    try {
+      return akiDb
+        .prepare(
+          "SELECT episode, lang, group_name, release, anime_title, " +
+          "COALESCE(extern_domain,'akihabara') AS extern_domain " +
+          "FROM subs WHERE r2_key IS NOT NULL AND r2_key<>'' " +
+          `AND ${idCol}=@id${epCond} ORDER BY episode, lang, group_name`
+        )
+        .all({ id, episode });
+    } catch (e) {
+      console.error('[akihabara] subsAvailability chyba:', e.message);
+      return [];
+    }
+  };
+
   const summarize = (idCol, id) => {
-    const rows = db
+    const hRows = db
       .prepare(
-        `SELECT episode, lang, group_name, release, anime_title ${base} AND ${idCol}=@id${epCond} ` +
+        `SELECT episode, lang, group_name, release, anime_title, extern_domain ${base} AND ${idCol}=@id${epCond} ` +
         'ORDER BY episode, lang, group_name'
       )
       .all({ id, episode });
+    const aRows = akiRows(idCol, id);
+    // hiyori první, akihabara za ním
+    const rows = [...hRows, ...aRows];
     if (!rows.length) return null;
 
     const anime_title = (rows[0].anime_title || '').replace(/\s*-\s*Hiyori$/i, '');
     const langs = [...new Set(rows.map((r) => r.lang).filter(Boolean))].sort();
 
-    // seskup podle epizody → varianty {lang, group, release}
+    // seskup podle epizody → varianty {lang, group, release, source}
     const epMap = new Map();
     for (const r of rows) {
       if (r.episode == null) continue;
@@ -372,6 +446,7 @@ export function subsAvailability({ anilist = null, mal = null, episode = null })
         lang: r.lang,
         group: r.group_name,
         release: r.release,
+        source: r.extern_domain || 'hiyori',
       });
     }
     const episodes = [...epMap.entries()]
