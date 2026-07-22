@@ -194,8 +194,8 @@ export const finishRun = (row) =>
   _finishRun.run({ finished_at: new Date().toISOString(), ...row });
 
 // --- dashboard dotazy ---
-export const overviewCounts = () =>
-  db
+export const overviewCounts = () => {
+  const h = db
     .prepare(
       `SELECT
         COUNT(*) AS total,
@@ -206,6 +206,25 @@ export const overviewCounts = () =>
        FROM subs`
     )
     .get();
+
+  // přičti akihabara archiv (statický, vše je na R2 = downloaded)
+  let aki = 0;
+  if (akiDb) {
+    try {
+      aki = akiDb.prepare("SELECT COUNT(*) c FROM subs WHERE r2_key IS NOT NULL AND r2_key<>''").get().c;
+    } catch { aki = 0; }
+  }
+
+  return {
+    total: (h.total || 0) + aki,
+    downloaded: (h.downloaded || 0) + aki,
+    extern_pending: h.extern_pending || 0,
+    failed: h.failed || 0,
+    on_r2: (h.on_r2 || 0) + aki,
+    hiyori: h.total || 0,   // rozpad pro případ, že by ho web chtěl
+    akihabara: aki,
+  };
+};
 export const recentSubs = (limit = 100) =>
   db.prepare('SELECT * FROM subs ORDER BY first_seen DESC, sub_id DESC LIMIT ?').all(limit);
 
