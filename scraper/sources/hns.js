@@ -1,10 +1,10 @@
 // scraper/sources/hns.js — parser pro hns.sk (Yii2 + přihlášení).
 //
 // hiyori odkazuje buď rovnou na stránku epizody (/anime/episode/{slug}/{id}),
-// nebo jen na stránku anime (/anime/{slug}) — typicky u BD sad. V druhém
-// případě se na stránce najde blok daného dílu; jeho nadpis je zároveň
-// odkazem na epizodu (<a href="/anime/episode/{slug}/{id}">{Nazev} {N}</a>),
-// takže z něj máme číslo dílu i cílovou adresu.
+// nebo jen na stránku seriálu (/anime/{slug}) — typicky u BD sad. Odkaz na
+// seriál ale neříká, o kterou sezónu jde, takže se adresa dílu přebírá od
+// jiného záznamu téhož dílu (web-dl sada ji obvykle má); teprve když takový
+// není, hledá se blok podle čísla, a to jen když číslování prokazatelně sedí.
 //
 // Stahuje se VŽDY jen ta varianta, kterou hiyori uvádí v poli `release`
 // (SubsPlease / BDRip / Erai-raws …). Pro každý release má hiyori vlastní
@@ -19,7 +19,7 @@
 import * as cheerio from 'cheerio';
 import { getHtml, postBinary } from './hns-http.js';
 import { saveSubFile } from '../download.js';
-import { setRelease } from '../../db.js';
+import { setRelease, findEpisodeUrlSibling, maxEpisodeForHiyoriId } from '../../db.js';
 
 export const name = 'hns.sk';
 
@@ -54,23 +54,51 @@ function episodeLinks($) {
   return out;
 }
 
-// Zjistí URL stránky epizody — buď ji hiyori dala rovnou, nebo ji najdeme
-// na stránce anime podle čísla dílu.
+// Zjistí URL stránky epizody.
+//
+// hiyori dává buď odkaz rovnou na díl, nebo jen na seriál (typicky u BD sad).
+// Odkaz na seriál ale neříká, o kterou půlku jde — u sloučených sérií nese
+// stránka všechny díly pod jedním názvem a čísluje je průběžně, kdežto hiyori
+// čísluje po sezónách od 1. Proto:
+//   1) odkaz na díl        → použije se rovnou
+//   2) odkaz na seriál     → adresa se převezme od jiného záznamu téhož dílu
+//                            (web-dl sada odkaz na díl obvykle má)
+//   3) když takový není    → blok podle čísla, ale JEN když počet dílů na
+//                            stránce odpovídá tomu, co hiyori pro anime eviduje
+//   4) jinak chyba — mapování se nedá určit, ať se radši doplní ručně
 async function resolveEpisodeUrl(sub) {
   if (/\/anime\/episode\//i.test(sub.url)) return sub.url;
+
+  const sibling = findEpisodeUrlSibling({
+    hiyori_id: sub.hiyori_id,
+    episode: sub.episode,
+    extern_domain: 'hns.sk',
+    sub_id: sub.sub_id,
+  });
+  if (sibling) return sibling;
 
   const html = await getHtml(sub.url);
   const $ = cheerio.load(html);
   const links = episodeLinks($);
   if (!links.length) {
-    throw new Error(`hns.sk: na stránce anime nejsou odkazy na epizody (${sub.url}).`);
+    throw new Error(`hns.sk: na stránce seriálu nejsou odkazy na epizody (${sub.url}).`);
+  }
+
+  const maxOnPage = Math.max(...links.map((l) => l.n));
+  const maxInDb = maxEpisodeForHiyoriId(sub.hiyori_id);
+  if (maxInDb && maxOnPage !== maxInDb) {
+    throw new Error(
+      `hns.sk: nelze určit díl — stránka seriálu má díly do ${maxOnPage}, hiyori pro tohle anime ` +
+      `eviduje do ${maxInDb}, takže se číslování rozchází (hns drží víc sezón pod jedním názvem). ` +
+      `Nestahuji. Buď stáhni nejdřív web-dl verzi téhož dílu, nebo doplň ručně přes 📤. ${sub.url}`
+    );
   }
 
   const hit = links.find((l) => l.n === sub.episode);
   if (!hit) {
-    const rozsah = `${Math.min(...links.map((l) => l.n))}–${Math.max(...links.map((l) => l.n))}`;
+    const rozsah = `${Math.min(...links.map((l) => l.n))}–${maxOnPage}`;
     throw new Error(
-      `hns.sk: na stránce anime není díl ${sub.episode} (stránka má díly ${rozsah}). ${sub.url}`
+      `hns.sk: na stránce seriálu není díl ${sub.episode} (stránka má díly ${rozsah}). ${sub.url}`
     );
   }
   return hit.url;
