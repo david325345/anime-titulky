@@ -1,21 +1,27 @@
 // scraper/sources/hns.js — parser pro hns.sk (Yii2 + přihlášení).
 //
-// hiyori odkazuje buď na stránku epizody (/anime/episode/{slug}/{id}),
-// nebo na stránku anime (/anime/{slug}) — pak dohledáme epizodu podle čísla dílu.
-// Stažení = <form method="POST"> s hidden id/name/_csrf/action=download na URL epizody.
+// hiyori odkazuje buď rovnou na stránku epizody (/anime/episode/{slug}/{id}),
+// nebo jen na stránku anime (/anime/{slug}) — typicky u BD sad. V druhém
+// případě se na stránce najde blok daného dílu; jeho nadpis je zároveň
+// odkazem na epizodu (<a href="/anime/episode/{slug}/{id}">{Nazev} {N}</a>),
+// takže z něj máme číslo dílu i cílovou adresu.
 //
-// Na jedné epizodě může být VÍC variant (SubsPlease / BDRip). Stahujeme VŠECHNY:
-// první = hlavní (hiyori sub_id), další dostanou vlastní sub_id (700000000 + hns_id).
-// Release (SubsPlease / BDRip (MTBB)) se bere z prvního sloupce řádku.
+// Stahuje se VŽDY jen ta varianta, kterou hiyori uvádí v poli `release`
+// (SubsPlease / BDRip / Erai-raws …). Pro každý release má hiyori vlastní
+// záznam, takže se ostatní řádky na stránce ignorují — nezakládají se žádné
+// extra záznamy. Když se release netrefí, radši chyba než cizí soubor.
+//
+// Pozor na číslování: párujeme na číslo v NADPISU bloku, ne na číslo v názvu
+// souboru titulku — hns pojmenovává soubory podle TVDB (u pokračování posunuté).
+//
+// Stažení = <form method="POST"> s hidden id/name/_csrf/action=download na URL epizody.
 
 import * as cheerio from 'cheerio';
 import { getHtml, postBinary } from './hns-http.js';
 import { saveSubFile } from '../download.js';
-import { insertSub, markDownloaded, subExists, setRelease } from '../../db.js';
+import { setRelease } from '../../db.js';
 
 export const name = 'hns.sk';
-
-const VARIANT_ID_BASE = 700000000; // vyhrazený rozsah pro extra varianty (nekoliduje s hiyori)
 
 function filenameFromCD(cd) {
   const star = cd.match(/filename\*\s*=\s*UTF-8''([^;]+)/i);
@@ -24,28 +30,50 @@ function filenameFromCD(cd) {
   return plain ? plain[1].trim() : null;
 }
 
-// skupina z prvního [..] názvu ([SubsPlease] → SubsPlease)
-function groupFromName(nm) {
-  const m = (nm || '').match(/\[([^\]]+)\]/);
-  return m ? m[1].trim() : null;
+// Normalizace názvu release na porovnatelný tvar. hiyori a hns se v zápisu
+// rozcházejí — „BDRip (MTTB)" × „BDRip (MTBB)" × „BD Rip (Ember)" — takže
+// zahazujeme obsah závorky i všechny mezery, pomlčky a tečky.
+function releaseKey(s) {
+  return String(s || '')
+    .replace(/\([^)]*\)/g, '')   // (MTBB), (Ember) …
+    .replace(/[\s._-]+/g, '')    // mezery, pomlčky, tečky, podtržítka
+    .toLowerCase()
+    .trim();
 }
 
-// ze stránky anime najde URL epizody podle čísla dílu (číslo na konci textu odkazu)
+// Ze stránky anime posbírá odkazy na epizody i s číslem z nadpisu bloku.
+// Speciály se zlomkem („16.5") přeskakujeme — do číslování dílů nepatří.
+function episodeLinks($) {
+  const out = [];
+  $('a[href*="/anime/episode/"]').each((_, a) => {
+    const href = $(a).attr('href') || '';
+    const m = $(a).text().replace(/\s+/g, ' ').trim().match(/(\d+(?:\.\d+)?)\s*$/);
+    if (!m || m[1].includes('.')) return;
+    out.push({ n: Number(m[1]), url: href.startsWith('http') ? href : 'https://hns.sk' + href });
+  });
+  return out;
+}
+
+// Zjistí URL stránky epizody — buď ji hiyori dala rovnou, nebo ji najdeme
+// na stránce anime podle čísla dílu.
 async function resolveEpisodeUrl(sub) {
   if (/\/anime\/episode\//i.test(sub.url)) return sub.url;
+
   const html = await getHtml(sub.url);
   const $ = cheerio.load(html);
-  let match = null;
-  $('a[href*="/anime/episode/"]').each((_, a) => {
-    if (match) return;
-    const href = $(a).attr('href') || '';
-    const n = Number(($(a).text().match(/(\d+)\s*$/) || [])[1]);
-    if (n === sub.episode) match = href.startsWith('http') ? href : 'https://hns.sk' + href;
-  });
-  if (!match) {
-    throw new Error(`hns.sk: na stránce anime nenašel odkaz na díl ${sub.episode} (${sub.url}).`);
+  const links = episodeLinks($);
+  if (!links.length) {
+    throw new Error(`hns.sk: na stránce anime nejsou odkazy na epizody (${sub.url}).`);
   }
-  return match;
+
+  const hit = links.find((l) => l.n === sub.episode);
+  if (!hit) {
+    const rozsah = `${Math.min(...links.map((l) => l.n))}–${Math.max(...links.map((l) => l.n))}`;
+    throw new Error(
+      `hns.sk: na stránce anime není díl ${sub.episode} (stránka má díly ${rozsah}). ${sub.url}`
+    );
+  }
+  return hit.url;
 }
 
 // vytáhne všechny download varianty ze stránky epizody
@@ -62,6 +90,15 @@ function parseVariants($) {
       if (id && csrf) out.push({ id, fname: fname || '', csrf, release });
     });
   return out;
+}
+
+// Vybere řádek odpovídající release z hiyori záznamu. Když hiyori release
+// nemá vyplněný, vezme se první (typicky jediný) řádek. Když ho má, ale na
+// stránce takový není, vrací null → volající to nahlásí jako chybu.
+function pickVariant(variants, wantedRelease) {
+  const key = releaseKey(wantedRelease);
+  if (!key) return variants[0];
+  return variants.find((v) => releaseKey(v.release) === key) || null;
 }
 
 // stáhne jeden .ass podle varianty (POST na epUrl)
@@ -86,58 +123,18 @@ export async function download(sub) {
     throw new Error(`hns.sk: na stránce epizody není download formulář (${epUrl}).`);
   }
 
-  // 1) hlavní varianta = první → uloží se pod hiyori sub_id (vrací se do run.js)
-  const main = variants[0];
-  const { buf, rawName } = await fetchVariant(epUrl, main);
-  const mainSaved = await saveSubFile(sub, buf, rawName);
-  if (main.release) setRelease(sub.sub_id, main.release); // SubsPlease / BDRip
-
-  // 2) další varianty → vlastní sub_id, uloží a označí jako stažené přímo tady
-  for (const v of variants.slice(1)) {
-    const variantSubId = VARIANT_ID_BASE + Number(v.id);
-    // už staženo dřív? přeskoč (idempotentní)
-    if (subExists(variantSubId)) continue;
-
-    insertSub({
-      sub_id: variantSubId,
-      hiyori_id: sub.hiyori_id,
-      anilist_id: sub.anilist_id,
-      mal_id: sub.mal_id,
-      anime_title: sub.anime_title,
-      episode: sub.episode,
-      lang: sub.lang,
-      group_id: null,
-      group_name: groupFromName(v.fname),
-      release: v.release || null,
-      version: null,
-      kind: 'extern',
-      url: epUrl,
-      extern_domain: 'hns.sk',
-      added_date: sub.added_date,
-      first_seen: new Date().toISOString(),
-      status: 'pending_extern',
-    });
-
-    try {
-      const r = await fetchVariant(epUrl, v);
-      const saved = await saveSubFile(
-        { ...sub, sub_id: variantSubId, group_name: groupFromName(v.fname) },
-        r.buf,
-        r.rawName
-      );
-      markDownloaded({
-        sub_id: variantSubId,
-        filename: saved.filename,
-        local_path: saved.local_path,
-        file_bytes: saved.file_bytes,
-        r2_key: saved.r2_key ?? null,
-      });
-      if (v.release) setRelease(variantSubId, v.release);
-    } catch (e) {
-      // varianta selhala — hlavní titulek tím nerozbijeme, jen zalogujeme
-      console.error(`hns varianta ${variantSubId} selhala: ${e.message}`);
-    }
+  const variant = pickVariant(variants, sub.release);
+  if (!variant) {
+    const nabidka = variants.map((v) => v.release || '?').join(', ');
+    throw new Error(
+      `hns.sk: release „${sub.release}" na stránce dílu není (nabízí: ${nabidka}). ` +
+      `Nestahuji — doplň ručně přes 📤, nebo uprav parser. ${epUrl}`
+    );
   }
 
-  return mainSaved; // run.js označí hlavní jako downloaded
+  const { buf, rawName } = await fetchVariant(epUrl, variant);
+  const saved = await saveSubFile(sub, buf, rawName);
+  if (variant.release) setRelease(sub.sub_id, variant.release);
+
+  return saved; // run.js označí záznam jako downloaded
 }
