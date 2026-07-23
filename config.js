@@ -65,6 +65,18 @@ export const CONFIG = {
     publicBase: (process.env.R2_PUBLIC_BASE || '').replace(/\/+$/, ''), // volitelné veřejné URL
   },
 
+  // Zdroje, které se NEMAJÍ vůbec evidovat — záznamy z nich se při přidávání
+  // anime přeskočí (nezaloží se ani jako pending_extern). Hodí se pro archivy,
+  // které už máme kompletně naimportované jinudy (např. TeamNS v akihabara.db).
+  // Porovnává se bez ohledu na velikost písmen a okolní mezery.
+  // Přebít jde přes env, čárkou oddělený seznam.
+  blocked: {
+    domains: (process.env.BLOCKED_DOMAINS || 'teamns.gensubs.cz')
+      .split(',').map((s) => s.trim()).filter(Boolean),
+    groups: (process.env.BLOCKED_GROUPS || 'Team NShonyaku')
+      .split(',').map((s) => s.trim()).filter(Boolean),
+  },
+
   // Basic Auth na dashboard + admin (addon endpointy zůstávají veřejné).
   // Když AUTH_USER/AUTH_PASS chybí, dashboard není chráněný.
   // AUTH_USER2/AUTH_PASS2 je volitelný druhý účet se stejnými právy.
