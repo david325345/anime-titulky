@@ -249,6 +249,36 @@ export const overviewCounts = () => {
     akihabara: aki,
   };
 };
+// --- hns.sk: pomocné dotazy pro překlad odkazu na seriál → odkaz na díl ---
+// Najde URL na konkrétní epizodu u JINÉHO záznamu téhož anime a téhož dílu
+// (typicky web-dl sada, která odkaz na díl má). hiyori drží každou sezónu pod
+// vlastním hiyori_id, takže se dotaz nemůže trefit do jiné série ani půlky.
+// Vrací null, když takový záznam neexistuje.
+export function findEpisodeUrlSibling({ hiyori_id, episode, extern_domain, sub_id = null }) {
+  if (!hiyori_id || episode == null || !extern_domain) return null;
+  const row = db
+    .prepare(
+      `SELECT url FROM subs
+        WHERE hiyori_id = @hiyori_id
+          AND episode = @episode
+          AND extern_domain = @extern_domain
+          AND url LIKE '%/anime/episode/%'
+          AND (@sub_id IS NULL OR sub_id <> @sub_id)
+        ORDER BY sub_id
+        LIMIT 1`
+    )
+    .get({ hiyori_id, episode, extern_domain, sub_id });
+  return row?.url || null;
+}
+
+// Nejvyšší číslo dílu, které hiyori pro dané anime eviduje — slouží ke kontrole,
+// jestli číslování na stránce zdroje odpovídá právě téhle sezóně.
+export function maxEpisodeForHiyoriId(hiyori_id) {
+  if (!hiyori_id) return null;
+  const row = db.prepare('SELECT MAX(episode) AS mx FROM subs WHERE hiyori_id = ?').get(hiyori_id);
+  return row?.mx ?? null;
+}
+
 export const recentSubs = (limit = 100) =>
   db.prepare('SELECT * FROM subs ORDER BY first_seen DESC, sub_id DESC LIMIT ?').all(limit);
 
