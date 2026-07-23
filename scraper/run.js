@@ -14,6 +14,19 @@ import {
 let running = false;
 export const isRunning = () => running;
 
+// Blokované zdroje/skupiny (CONFIG.blocked) — takové řádky se vůbec neevidují.
+// Používá se pro archivy, které už máme kompletně naimportované jinudy, aby
+// zbytečně nezůstávaly viset ve frontě jako „čeká na parser".
+const norm = (s) => String(s || '').trim().toLowerCase();
+const BLOCKED_DOMAINS = new Set((CONFIG.blocked?.domains || []).map(norm));
+const BLOCKED_GROUPS = new Set((CONFIG.blocked?.groups || []).map(norm));
+
+function isBlockedRow(row) {
+  if (row.extern_domain && BLOCKED_DOMAINS.has(norm(row.extern_domain))) return true;
+  if (row.group_name && BLOCKED_GROUPS.has(norm(row.group_name))) return true;
+  return false;
+}
+
 // Naparsuje jedno anime z hiyori (detail) a uloží jeho titulky do DB.
 // onlyEpisodes = Set čísel epizod → uloží jen ty díly (automatický scrape z feedu).
 // onlyEpisodes = null/prázdné → uloží celou tabulku (ruční přidání přes URL).
@@ -35,7 +48,9 @@ export async function ingestAnime(hiyoriId, card = {}, { onlyEpisodes = null, ma
     : detail.rows;
 
   let added = 0;
+  let blocked = 0;
   for (const row of rows) {
+    if (isBlockedRow(row)) { blocked++; continue; }
     const changed = insertSub({
       sub_id: row.sub_id,
       hiyori_id: hiyoriId,
@@ -64,6 +79,7 @@ export async function ingestAnime(hiyoriId, card = {}, { onlyEpisodes = null, ma
   return {
     found: rows.length,
     added,
+    blocked,
     title: detail.title,
     anilistId: detail.anilist_id,
     malId: detail.mal_id,
