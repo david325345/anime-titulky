@@ -120,6 +120,12 @@ button.del-r2 {
 }
 button.del-r2:hover { background: rgba(255,60,60,.18); border-color: #ff5c5c; }
 button.del-r2:disabled { opacity: .4; cursor: default; }
+button.reset-sub {
+  background: transparent; border: 1px solid #4a6c9c; color: #8fc4ff;
+  border-radius: 6px; padding: 2px 8px; cursor: pointer; font-size: 13px; line-height: 1; margin-left: 4px;
+}
+button.reset-sub:hover { background: rgba(80,140,255,.16); border-color: #6c9cd0; }
+button.reset-sub:disabled { opacity: .4; cursor: default; }
 .manual-toggle { display: block; margin: 10px 0 4px; font-size: 13px; color: var(--muted); cursor: pointer; }
 .manual-toggle input { margin-right: 6px; vertical-align: middle; }
 .manual-row { gap: 8px; margin-top: 6px; }

@@ -90,7 +90,7 @@ function renderSubs(subs) {
       <td class="nowrap">${statusCell(s)}</td>
       <td class="nowrap">${onR2}</td>
       <td class="nowrap">${dl}</td>
-      <td class="nowrap">${dlNowBtn}${uploadBtn}${canDelete ? `<button class="edit-sub" data-id="${s.sub_id}" data-group="${esc(s.group_name || '')}" data-release="${esc(s.release || '')}" data-lang="${esc(s.lang || '')}" title="Upravit fansub / release / jazyk">✏️</button>` : ''}${canDelete ? `<button class="del" data-id="${s.sub_id}" title="Smazat záznam z DB (na R2 zůstává)">✖</button>` : ''}${(canDelete && s.r2_key) ? `<button class="del-r2" data-id="${s.sub_id}" title="Smazat úplně (DB i soubor na R2)">🗑</button>` : ''}</td>
+      <td class="nowrap">${dlNowBtn}${uploadBtn}${canDelete ? `<button class="edit-sub" data-id="${s.sub_id}" data-group="${esc(s.group_name || '')}" data-release="${esc(s.release || '')}" data-lang="${esc(s.lang || '')}" title="Upravit fansub / release / jazyk">✏️</button>` : ''}${canDelete ? `<button class="del" data-id="${s.sub_id}" title="Smazat záznam z DB (na R2 zůstává)">✖</button>` : ''}${(canDelete && s.r2_key) ? `<button class="del-r2" data-id="${s.sub_id}" title="Smazat úplně (DB i soubor na R2)">🗑</button>` : ''}${(canDelete && s.status === 'downloaded') ? `<button class="reset-sub" data-id="${s.sub_id}" title="Smazat soubor z R2 a vrátit mezi nestažené (pak jde nahrát správný přes 📤)">♻</button>` : ''}</td>
     </tr>`;
   }).join('') || `<tr><td colspan="11" class="muted">Nic nenalezeno.</td></tr>`;
 }
@@ -436,6 +436,28 @@ $('#subsTable').addEventListener('click', async (e) => {
     } catch (err) {
       alert('Chyba: ' + err.message);
       r2Btn.disabled = false;
+    }
+    return;
+  }
+
+  // vrácení mezi nestažené (smaže soubor z R2, záznam zůstane)
+  const rsBtn = e.target.closest('button.reset-sub');
+  if (rsBtn) {
+    const id = rsBtn.dataset.id;
+    if (!confirm('Smazat soubor z R2 a vrátit záznam mezi nestažené?\n\nZáznam v DB zůstane, půjde k němu nahrát správný titulek přes 📤.')) return;
+    rsBtn.disabled = true;
+    try {
+      const r = await (await fetch(`/api/sub/${id}/reset`, { method: 'POST' })).json();
+      if (r.error) {
+        alert('Nešlo vrátit: ' + r.error);
+        rsBtn.disabled = false;
+      } else {
+        loadSubs();
+        loadOverview();
+      }
+    } catch (err) {
+      alert('Chyba: ' + err.message);
+      rsBtn.disabled = false;
     }
     return;
   }
