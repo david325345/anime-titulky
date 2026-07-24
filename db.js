@@ -279,6 +279,20 @@ export function maxEpisodeForHiyoriId(hiyori_id) {
   return row?.mx ?? null;
 }
 
+// Vrátí stažený záznam do stavu „nestaženo" — smaže odkaz na soubor i velikost,
+// takže se u něj v dashboardu zase objeví 📤 a ⬇. Samotný soubor na R2 maže
+// volající (server.js), tady jen čistíme evidenci.
+export function resetSubDownload(sub_id, status) {
+  return db
+    .prepare(
+      `UPDATE subs
+          SET status = @status, r2_key = NULL, filename = NULL,
+              file_bytes = NULL, local_path = NULL, error = NULL
+        WHERE sub_id = @sub_id`
+    )
+    .run({ sub_id, status }).changes;
+}
+
 export const recentSubs = (limit = 100) =>
   db.prepare('SELECT * FROM subs ORDER BY first_seen DESC, sub_id DESC LIMIT ?').all(limit);
 

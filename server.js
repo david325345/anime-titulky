@@ -8,7 +8,7 @@ import { runOnce, downloadOnce, downloadSingle, isRunning, ingestAnime, addManua
 import {
   overviewCounts, recentSubs, recentRuns, getMeta, getSub, findSubs, subsAvailability,
   listSubs, deleteSub, recentlyAdded, markDownloaded, allSubs, updateSubMeta,
-  listAkihabaraAnime, akihabaraAnimeDetail, akihabaraStats,
+  listAkihabaraAnime, akihabaraAnimeDetail, akihabaraStats, resetSubDownload,
 } from './db.js';
 import * as hanabi from './scraper/sources/hanabi.js';
 import { saveSubFile } from './scraper/download.js';
@@ -289,6 +289,33 @@ app.delete('/api/sub/:subId', requireUser1, async (req, res) => {
   }
   const n = deleteSub(subId);
   res.json({ deleted: n > 0, r2_deleted: r2Deleted });
+});
+
+// vrácení staženého záznamu zpět mezi nestažené — smaže soubor z R2 a vyčistí
+// evidenci, takže u něj zase půjde 📤 (nahrát správný titulek) i ⬇ (stáhnout
+// znovu). Záznam v DB zůstává, ID i metadata se nemění. Jen user1.
+app.post('/api/sub/:subId/reset', requireUser1, async (req, res) => {
+  const subId = Number(req.params.subId);
+  const sub = getSub(subId);
+  if (!sub) return res.status(404).json({ error: 'Záznam nenalezen.' });
+
+  let r2Deleted = false;
+  if (sub.r2_key) {
+    try {
+      r2Deleted = await r2Delete(sub.r2_key);
+    } catch (e) {
+      return res.status(500).json({ error: 'R2: ' + e.message });
+    }
+  }
+
+  // zpátky do stavu, ve kterém záznam vznikl
+  const status =
+    sub.kind === 'manual' ? 'not_downloaded'
+    : sub.kind === 'direct' ? (CONFIG.downloadEnabled ? 'new' : 'not_downloaded')
+    : 'pending_extern';
+
+  const n = resetSubDownload(subId, status);
+  res.json({ ok: n > 0, status, r2_deleted: r2Deleted });
 });
 
 // editace popisných metadat (Fansub / Release / Jazyk). Nemění Ep ani Zdroj,
