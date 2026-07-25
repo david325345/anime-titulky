@@ -230,8 +230,24 @@ async function addAnime() {
       if (r.manual) {
         msg.textContent = `✅ ${r.title || 'anime'} — vytvořeno ${r.added} prázdných záznamů (díly ${r.from}–${r.to}). Nahraj k nim titulky přes 📤.`;
       } else {
-        const dl = r.download_enabled ? 'zařazeno do fronty' : 'evidováno (stahování vypnuté)';
-        msg.textContent = `✅ ${r.title || 'anime'} — nalezeno ${r.found} titulků, nových ${r.added}, ${dl}.`;
+        const found = r.found || 0;
+        const added = r.added || 0;
+        const blocked = r.blocked || 0;
+        const skipped = found - added - blocked; // už v DB (duplicity)
+        const title = r.title || 'anime';
+
+        if (found === 0) {
+          msg.textContent = `✅ ${title} — hiyori nemá žádné titulky.`;
+        } else if (added === 0 && skipped > 0) {
+          // vše, co hiyori nabízí, už máme
+          msg.textContent = `ℹ️ ${title} — nic nového, všech ${skipped} titulků už v databázi máme.`;
+        } else {
+          const dl = r.download_enabled ? 'zařazeno do fronty' : 'evidováno (stahování vypnuté)';
+          let t = `✅ ${title} — nalezeno ${found}, nových ${added} (${dl})`;
+          if (skipped > 0) t += `, ${skipped} už jsme měli`;
+          if (blocked > 0) t += `, ${blocked} blokováno`;
+          msg.textContent = t + '.';
+        }
       }
       $('#addUrl').value = '';
       load();
