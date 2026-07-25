@@ -424,6 +424,7 @@ app.get('/api/add-anime', async (req, res) => {
       mal_id: r.malId,
       found: r.found,
       added: r.added,
+      blocked: r.blocked,
       download_enabled: CONFIG.downloadEnabled,
     });
   } catch (e) {
