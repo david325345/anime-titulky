@@ -409,10 +409,33 @@ export function allSubs() {
     )
     .all();
 
-  // anime (anilist|mal|hiyori) → epizoda → titulky
+  // archiv (akihabara + teamns) — stejný tvar, aliasujeme akihabara_id na sub_id,
+  // hiyori_id nemá (NULL), extern_domain nese zdroj
+  let akiRows = [];
+  if (akiDb) {
+    try {
+      akiRows = akiDb
+        .prepare(
+          "SELECT akihabara_id AS sub_id, NULL AS hiyori_id, anilist_id, mal_id, anime_title, " +
+          "episode, lang, group_name, release, version, NULL AS kind, " +
+          "COALESCE(extern_domain,'akihabara') AS extern_domain, r2_key " +
+          "FROM subs WHERE r2_key IS NOT NULL AND r2_key<>'' " +
+          "ORDER BY anime_title, episode, lang, group_name"
+        )
+        .all();
+    } catch (e) {
+      console.error('[akihabara] allSubs chyba:', e.message);
+    }
+  }
+
+  // anime (anilist|mal|hiyori) → epizoda → titulky. Klíč přednostně podle
+  // anilist/mal, aby se stejné anime z hiyori i archivu spojilo pod jeden záznam;
+  // teprve když ID chybí, rozlišíme podle hiyori_id.
   const anime = new Map();
-  for (const r of rows) {
-    const key = `${r.anilist_id || ''}|${r.mal_id || ''}|${r.hiyori_id || ''}`;
+  const addRow = (r) => {
+    const key = (r.anilist_id || r.mal_id)
+      ? `${r.anilist_id || ''}|${r.mal_id || ''}`
+      : `h|${r.hiyori_id || ''}`;
     if (!anime.has(key)) {
       anime.set(key, {
         hiyori_id: r.hiyori_id,
@@ -433,17 +456,20 @@ export function allSubs() {
       source: r.extern_domain || 'hiyori',
       r2_key: r.r2_key, // server z něj udělá gz_url
     });
-  }
+  };
+
+  for (const r of rows) addRow(r);      // hiyori první
+  for (const r of akiRows) addRow(r);   // archiv za ním
 
   const items = [...anime.values()].map((a) => {
     const episodes = [...a._eps.entries()]
       .map(([episode, subs]) => ({ episode, subs }))
-      .sort((x, y) => x.episode - y.episode);
+      .sort((x, y) => (x.episode ?? 0) - (y.episode ?? 0));
     const { _eps, ...rest } = a;
     return { ...rest, episodes };
   });
 
-  return { items, subsTotal: rows.length };
+  return { items, subsTotal: rows.length + akiRows.length };
 }
 
 // "Dnes přidané" pro addon: stažené titulky (na R2) podle first_seen.
