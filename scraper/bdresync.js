@@ -144,22 +144,11 @@ function episodeFromName(name) {
   return null;
 }
 
-// z titulkových příloh vyber PLNOU DIALOGOVOU stopu (ne Signs/Songs; NE podle
-// jazyka — plná stopa bývá tagovaná i jako 'jpn'). Radši null než hádat.
-function pickDialogue(atts) {
-  const subs = (atts || []).filter((a) => a.type === 'subtitle');
-  if (!subs.length) return null;
-  const nameOf = (a) => (a.info?.name || '').toLowerCase();
-  const isSigns = (a) => /sign|song/.test(nameOf(a));
-  const isFull = (a) => /full|dialog/.test(nameOf(a));
-  return (
-    subs.find((a) => isFull(a) && !isSigns(a)) ||
-    subs.find((a) => !isSigns(a) && nameOf(a)) ||
-    (subs.length === 1 ? subs[0] : null)
-  );
-}
-
-async function pickReference(releases, episode) {
+// Posbírej VŠECHNY dialogové titulkové stopy (ne Signs/Songs) pro daný díl,
+// napříč releasy seřazenými dle žebříčku skupin; Full/Dialogue napřed. Bitmapové
+// (PGS) se nedají poznat z metadat → odfiltrují se AŽ po stažení (podle obsahu),
+// tady vrátíme všechny kandidáty {attachId, releaseTitle, group}.
+async function collectCandidates(releases, episode) {
   const rank = (g) => {
     const i = CONFIG.bdGroupRanking.findIndex(
       (x) => x.toLowerCase() === (g || '').toLowerCase()
@@ -167,9 +156,9 @@ async function pickReference(releases, episode) {
     return i === -1 ? 999 : i;
   };
   const sorted = [...releases].sort((a, b) => rank(a.group) - rank(b.group));
-
-  const probed = sorted.slice(0, 8); // strop na hammrování Tosho
-  for (const rel of probed) {
+  const out = [];
+  const seen = new Set();
+  for (const rel of sorted.slice(0, 8)) {
     let data;
     try { data = await toshoJson(`show=torrent&id=${rel.id}`); } catch { continue; }
     const files = Array.isArray(data) ? data : data.files || [];
@@ -177,11 +166,20 @@ async function pickReference(releases, episode) {
       let ep = episodeFromName(f.filename);
       if (ep == null && files.length === 1) ep = episodeFromName(rel.title);
       if (ep !== episode) continue;
-      const att = pickDialogue(f.attachments);
-      if (att) return { attachId: att.id, releaseTitle: rel.title, group: rel.group };
+      const subs = (f.attachments || []).filter((a) => a.type === 'subtitle');
+      const scored = subs
+        .map((a) => ({ a, nm: (a.info?.name || '').toLowerCase() }))
+        .filter((x) => !/sign|song/.test(x.nm)) // Signs/Songs vynech
+        .sort((x, y) => // Full/Dialogue napřed
+          (/(full|dialog)/.test(y.nm) ? 1 : 0) - (/(full|dialog)/.test(x.nm) ? 1 : 0));
+      for (const { a } of scored) {
+        if (seen.has(a.id)) continue;
+        seen.add(a.id);
+        out.push({ attachId: a.id, releaseTitle: rel.title, group: rel.group });
+      }
     }
   }
-  return null;
+  return out;
 }
 
 async function downloadAttachXz(attachId) {
@@ -257,46 +255,43 @@ async function saveMachine(sub, outputText, releaseTitle, source, kind = 'BD aut
   return { machineId, r2_key, r2_url: r2PublicUrl(r2_key), bytes: outBuf.length };
 }
 
-// společný konec: stáhni CZ z R2 → subsync → ulož strojovou verzi
-async function resyncAndSave(sub, refBuf, refName, releaseTitle, source, kind = 'BD auto') {
+// stáhni CZ titulek z R2 a připrav pro subsync (gzip→gunzip; plain→beze změny)
+async function loadCz(sub) {
   const czRaw = await r2Get(sub.r2_key);
-  if (!czRaw || !czRaw.length) {
-    return { ok: false, stage: 'cz', error: 'CZ titulek se nepodařilo stáhnout z R2.' };
-  }
-  // Soubor na R2 může být gzip (hiyori + většina archivu) i plain .ass/.srt
-  // (část archivu se ukládala nezabalená). Rozbal jen když je to fakticky gzip.
+  if (!czRaw || !czRaw.length) return null;
   let czBuf = czRaw;
   if (czRaw[0] === 0x1f && czRaw[1] === 0x8b) {
     try { czBuf = zlib.gunzipSync(czRaw); } catch { czBuf = czRaw; }
   }
-  const czName = baseNameOf(sub);
+  return { czBuf, czName: baseNameOf(sub) };
+}
 
-  const sync = await callSubsync(refBuf, refName, czBuf, czName);
+// společný konec pro RUČNÍ referenci: CZ z R2 → subsync → ulož strojovou verzi
+async function resyncAndSave(sub, refBuf, refName, releaseTitle, source, kind = 'BD auto') {
+  const cz = await loadCz(sub);
+  if (!cz) return { ok: false, stage: 'cz', error: 'CZ titulek se nepodařilo stáhnout z R2.' };
+  const sync = await callSubsync(refBuf, refName, cz.czBuf, cz.czName);
   if (!sync.ok || !sync.output) {
     return { ok: false, stage: 'subsync', error: sync.message || 'Přečas selhal.', detail: sync };
   }
   const saved = await saveMachine(sub, sync.output, releaseTitle, source, kind);
   return {
-    ok: true,
-    kind,
-    release: releaseTitle,
-    episode: sub.episode,
-    format: sync.format,
-    elapsed_ms: sync.elapsed_ms,
-    machine_sub_id: saved.machineId,
-    file_bytes: saved.bytes,
+    ok: true, kind, release: releaseTitle, episode: sub.episode,
+    format: sync.format, elapsed_ms: sync.elapsed_ms,
+    machine_sub_id: saved.machineId, file_bytes: saved.bytes,
   };
 }
 
 // ── orchestrátor: AUTO (reference z Toshu) ──────────────────────────────────
+// Posbírá dialogové stopy z BD releasů (pak DVD), a bitmapové (PGS) /
+// neparsovatelné PŘESKAKUJE, dokud nenajde textovou, se kterou přečas projde.
+// Selže až když žádná použitelná textová reference není.
 export async function bdResync(sub, source = 'hiyori') {
   if (sub.episode == null) {
     return { ok: false, stage: 'input', error: 'Auto přečas potřebuje číslo dílu (u filmu použij ruční referenci).' };
   }
-  // 1) anidb ID
   const anidb = await resolveAnidbId(sub);
 
-  // 2) releasy na Toshu — přednostně BD, jako záloha DVD
   const feed = await toshoJson(`aid=${anidb}`);
   const arr = Array.isArray(feed) ? feed : [];
   const complete = arr.filter((x) => x.status === 'complete');
@@ -310,25 +305,47 @@ export async function bdResync(sub, source = 'hiyori') {
     return { ok: false, stage: 'tosho', anidb, error: 'Na Toshu není BD ani DVD release.' };
   }
 
-  // 3) reference = plná dialogová stopa daného dílu; nejdřív BD, pak DVD
-  let ref = null;
-  let kind = 'BD auto';
-  if (bdRels.length) ref = await pickReference(bdRels, sub.episode);
-  if (!ref && dvdRels.length) {
-    ref = await pickReference(dvdRels, sub.episode);
-    if (ref) kind = 'DVD auto';
-  }
-  if (!ref) {
+  // kandidáti: BD napřed (kind 'BD auto'), pak DVD ('DVD auto')
+  const candidates = [
+    ...(await collectCandidates(bdRels, sub.episode)).map((c) => ({ ...c, kind: 'BD auto' })),
+    ...(await collectCandidates(dvdRels, sub.episode)).map((c) => ({ ...c, kind: 'DVD auto' })),
+  ];
+  if (!candidates.length) {
     return { ok: false, stage: 'reference', anidb,
       bd_releases: bdRels.length, dvd_releases: dvdRels.length,
-      error: `V BD ani DVD releasech nenalezena dialogová stopa pro díl ${sub.episode}.` };
+      error: `V BD ani DVD releasech není dialogová stopa pro díl ${sub.episode}.` };
   }
 
-  // 4) stáhni referenci (.xz) → 5+6) přečas + uložení (typ = BD/DVD auto)
-  const refXz = await downloadAttachXz(ref.attachId);
-  const r = await resyncAndSave(sub, refXz, 'ref.xz', ref.releaseTitle, source, kind);
-  if (r.ok) { r.anidb = anidb; r.group = ref.group; r.kind = kind; }
-  return r;
+  // CZ titulek stáhni jednou
+  const cz = await loadCz(sub);
+  if (!cz) return { ok: false, stage: 'cz', anidb, error: 'CZ titulek se nepodařilo stáhnout z R2.' };
+
+  // zkoušej kandidáty; bitmapové (PGS) / neparsovatelné přeskakuj
+  let tried = 0;
+  let skipped = 0;
+  let lastDetail = null;
+  for (const cand of candidates) {
+    if (tried >= 6) break; // strop na počet pokusů (Tosho + čas)
+    tried++;
+    let refXz;
+    try { refXz = await downloadAttachXz(cand.attachId); } catch { continue; }
+    const sync = await callSubsync(refXz, 'ref.xz', cz.czBuf, cz.czName);
+    if (sync.ok && sync.output) {
+      const saved = await saveMachine(sub, sync.output, cand.releaseTitle, source, cand.kind);
+      return {
+        ok: true, anidb, kind: cand.kind, release: cand.releaseTitle, group: cand.group,
+        episode: sub.episode, format: sync.format, elapsed_ms: sync.elapsed_ms,
+        machine_sub_id: saved.machineId, file_bytes: saved.bytes, tried,
+      };
+    }
+    if (sync.non_text) skipped++;
+    lastDetail = sync;
+  }
+  return {
+    ok: false, stage: 'reference', anidb, tried, skipped,
+    error: 'Nenašel jsem použitelnou textovou referenci — BD/DVD stopy jsou nejspíš bitmapové (PGS). Použij ruční referenci (.ass/.srt).',
+    detail: lastDetail,
+  };
 }
 
 // ── orchestrátor: RUČNÍ (reference nahraná uživatelem) ──────────────────────
