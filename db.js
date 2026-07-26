@@ -342,7 +342,7 @@ const _saveMachineSub = db.prepare(`
      manual_add, machine_of, machine_source)
   VALUES
     (@sub_id, @hiyori_id, @anilist_id, @mal_id, @anime_title, @episode, @lang, NULL,
-     @group_name, @release, 'BD auto', 'machine', NULL, NULL, NULL, @first_seen,
+     @group_name, @release, @version, 'machine', NULL, NULL, NULL, @first_seen,
      'downloaded', NULL, @filename, NULL, @file_bytes, @r2_key, @downloaded_at,
      0, @machine_of, @machine_source)
 `);
@@ -353,6 +353,7 @@ export function saveMachineSub(row) {
     downloaded_at: now,
     machine_source: 'hiyori',
     group_name: null,
+    version: null,
     ...row,
   });
 }
@@ -733,7 +734,7 @@ export function akihabaraAnimeDetail(anilistId) {
         group: r.group_name,
         release: r.release,
         machine: m
-          ? { sub_id: m.sub_id, release: m.release, file_bytes: m.file_bytes }
+          ? { sub_id: m.sub_id, release: m.release, version: m.version, file_bytes: m.file_bytes }
           : null,
       });
     }

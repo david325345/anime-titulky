@@ -243,6 +243,7 @@ app.get('/api/subs-list', (req, res) => {
         ? {
             sub_id: m.sub_id,
             release: m.release,
+            version: m.version,
             file_bytes: m.file_bytes,
             downloaded_at: m.downloaded_at,
           }
