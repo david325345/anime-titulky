@@ -9,6 +9,7 @@
 // RUČNÍ: reference nahraná uživatelem (přeskočí indexer/Tosho), group=originál.
 //
 // Zdroj (source): 'hiyori' = hlavní tabulka, 'akihabara' = archiv (jiné ID pásmo).
+import http from 'node:http';
 import https from 'node:https';
 import zlib from 'node:zlib';
 import { CONFIG } from '../config.js';
@@ -28,10 +29,17 @@ function indexerRequest(pathAndQuery, { method = 'GET', body = null, token = nul
   }
   if (token) headers['Authorization'] = `Bearer ${token}`;
 
+  // http:// (interní alias indexer:3003) i https:// (veřejná) — vyber knihovnu
+  // dle protokolu; self-signed agent má smysl jen u https.
+  const isHttps = url.protocol === 'https:';
+  const lib = isHttps ? https : http;
+  const reqOpts = { method, headers, timeout: 20000 };
+  if (isHttps) reqOpts.agent = insecureAgent;
+
   return new Promise((resolve, reject) => {
-    const req = https.request(
+    const req = lib.request(
       url,
-      { method, headers, agent: insecureAgent, timeout: 20000 },
+      reqOpts,
       (res) => {
         let data = '';
         res.on('data', (c) => (data += c));
