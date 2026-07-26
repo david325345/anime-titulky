@@ -8,10 +8,12 @@ import { runOnce, downloadOnce, downloadSingle, isRunning, ingestAnime, addManua
 import {
   overviewCounts, recentSubs, recentRuns, getMeta, getSub, findSubs, subsAvailability,
   listSubs, deleteSub, recentlyAdded, markDownloaded, allSubs, updateSubMeta,
-  listAkihabaraAnime, akihabaraAnimeDetail, akihabaraStats, resetSubDownload, releaseGroup,
+  listAkihabaraAnime, akihabaraAnimeDetail, akihabaraStats, resetSubDownload,
+  machineVersionsFor, getAkiSub,
 } from './db.js';
 import * as hanabi from './scraper/sources/hanabi.js';
 import { saveSubFile } from './scraper/download.js';
+import { bdResync, bdResyncManual } from './scraper/bdresync.js';
 import AdmZip from 'adm-zip';
 import { r2PublicUrl, r2Get, r2Delete } from './r2.js';
 import { liveDbGzip, backupDbToR2, startDbBackup, restoreDbFromBuffer } from './backup.js';
@@ -68,7 +70,7 @@ app.get('/api/subs', (req, res) => {
     sub_id: r.sub_id,
     lang: r.lang,
     group: r.group_name,
-    release: releaseGroup(r.release),
+    release: r.release,
     version: r.version,
     episode: r.episode,
     kind: r.kind,
@@ -229,12 +231,31 @@ app.get('/api/subs-list', (req, res) => {
   const page = Math.max(1, Number(req.query.page) || 1);
   const q = req.query.q ? String(req.query.q).trim() : null;
   const { rows, total } = listSubs({ limit: perPage, offset: (page - 1) * perPage, q });
+
+  // ke každému řádku připoj info o strojové verzi (BD auto), pokud existuje —
+  // web podle toho vykreslí rozbalovací „přečas ▸".
+  const machines = machineVersionsFor(rows.map((r) => r.sub_id));
+  const subs = rows.map((r) => {
+    const m = machines[r.sub_id];
+    return {
+      ...r,
+      machine: m
+        ? {
+            sub_id: m.sub_id,
+            release: m.release,
+            file_bytes: m.file_bytes,
+            downloaded_at: m.downloaded_at,
+          }
+        : null,
+    };
+  });
+
   res.json({
     page,
     per_page: perPage,
     total,
     pages: Math.max(1, Math.ceil(total / perPage)),
-    subs: rows,
+    subs,
   });
 });
 
@@ -317,6 +338,106 @@ app.post('/api/sub/:subId/reset', requireUser1, async (req, res) => {
   const n = resetSubDownload(subId, status);
   res.json({ ok: n > 0, status, r2_deleted: r2Deleted });
 });
+
+// „přečas na BD" (BD auto): z původního staženého CZ titulku → indexer (anidb) →
+// Tosho (BD reference) → subsync (alass) → uložení strojové verze na R2 + DB.
+// Nemění původní záznam; vytvoří/přepíše navázanou strojovou verzi.
+app.post('/api/sub/:subId/bd-resync', async (req, res) => {
+  const subId = Number(req.params.subId);
+  const sub = getSub(subId);
+  if (!sub) return res.status(404).json({ ok: false, error: 'Záznam nenalezen.' });
+  if (sub.machine_of || sub.group_name === 'BD auto') {
+    return res.status(400).json({ ok: false, error: 'Tohle už je strojová verze.' });
+  }
+  if (sub.status !== 'downloaded' || !sub.r2_key) {
+    return res.status(400).json({ ok: false, error: 'Přečas jde jen u staženého titulku (na R2).' });
+  }
+  if (sub.episode == null) {
+    return res.status(400).json({ ok: false, error: 'Záznam nemá číslo dílu.' });
+  }
+  try {
+    const r = await bdResync(sub);
+    res.json(r);
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ruční přečas na BD (hiyori): reference nahraje uživatel (raw body, .ass/.srt/.xz),
+// filename v query. Zbytek stejný jako auto — uloží strojovou verzi.
+app.post('/api/sub/:subId/bd-resync-manual',
+  express.raw({ type: '*/*', limit: '5mb' }),
+  async (req, res) => {
+    const subId = Number(req.params.subId);
+    const sub = getSub(subId);
+    if (!sub) return res.status(404).json({ ok: false, error: 'Záznam nenalezen.' });
+    if (sub.machine_of || sub.group_name === 'BD auto') {
+      return res.status(400).json({ ok: false, error: 'Tohle už je strojová verze.' });
+    }
+    if (sub.status !== 'downloaded' || !sub.r2_key) {
+      return res.status(400).json({ ok: false, error: 'Přečas jde jen u staženého titulku (na R2).' });
+    }
+    if (!req.body || !req.body.length) {
+      return res.status(400).json({ ok: false, error: 'Prázdná reference.' });
+    }
+    const refName = String(req.query.filename || 'ref.ass').trim();
+    try {
+      const r = await bdResyncManual(sub, req.body, refName, 'hiyori');
+      res.json(r);
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+// přečas na BD z ARCHIVU (akihabara). Originál je v akihabara.db (jiné ID pásmo);
+// strojová verze se ukládá do HLAVNÍ subs (machine_source='akihabara'). Archiv má
+// často anidb_id přímo → přečas přeskočí indexer.
+function akiSubUnified(row) {
+  return {
+    sub_id: row.akihabara_id,
+    hiyori_id: null,
+    anilist_id: row.anilist_id,
+    mal_id: row.mal_id,
+    anidb_id: row.anidb_id,
+    anime_title: row.anime_title,
+    episode: row.episode,
+    lang: row.lang,
+    release: row.release,
+    filename: row.filename,
+    r2_key: row.r2_key,
+    status: 'downloaded',
+  };
+}
+
+app.post('/api/akihabara/:akiId/bd-resync', async (req, res) => {
+  const row = getAkiSub(Number(req.params.akiId));
+  if (!row) return res.status(404).json({ ok: false, error: 'Archivní záznam nenalezen.' });
+  if (!row.r2_key) return res.status(400).json({ ok: false, error: 'Archivní titulek není na R2.' });
+  try {
+    const r = await bdResync(akiSubUnified(row), 'akihabara');
+    res.json(r);
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.post('/api/akihabara/:akiId/bd-resync-manual',
+  express.raw({ type: '*/*', limit: '5mb' }),
+  async (req, res) => {
+    const row = getAkiSub(Number(req.params.akiId));
+    if (!row) return res.status(404).json({ ok: false, error: 'Archivní záznam nenalezen.' });
+    if (!row.r2_key) return res.status(400).json({ ok: false, error: 'Archivní titulek není na R2.' });
+    if (!req.body || !req.body.length) {
+      return res.status(400).json({ ok: false, error: 'Prázdná reference.' });
+    }
+    const refName = String(req.query.filename || 'ref.ass').trim();
+    try {
+      const r = await bdResyncManual(akiSubUnified(row), req.body, refName, 'akihabara');
+      res.json(r);
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
 
 // editace popisných metadat (Fansub / Release / Jazyk). Nemění Ep ani Zdroj,
 // takže stahování se nerozbije. Jen user1.

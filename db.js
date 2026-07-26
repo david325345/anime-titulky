@@ -11,26 +11,6 @@ export const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
 db.pragma('busy_timeout = 8000');
 
-// releaseGroup(raw) — z dlouhého release stringu vytáhne jen skupinu (pro addon/Stremio label).
-// "[SubsPlease] Solo Leveling - 18 (720p) [ABCD]" -> "SubsPlease"
-// "(SubPlease + [Erai-raws]-1080)" -> "SubPlease + Erai-raws"
-// Konzervativní: když nenajde čistou skupinu (BD/Bluray/BDRip…), vrátí originál. NEMĚNÍ DB, jen výstup.
-export function releaseGroup(raw) {
-  if (!raw) return raw;
-  let s = String(raw).trim();
-  if (/^\(.*\)$/.test(s)) s = s.slice(1, -1).trim(); // odsekni obalové ()
-  const junk = /^(\d{3,4}p|x26[45]|h\.?26[45]|hevc|avc|web|web-?dl|webrip|bd|bdrip|blu-?ray|remux|aac\d?|ddp?\d?|eac3|flac|opus|multi|dual|\d+bit|nf|amzn|dsnp|hulu|cr|sub|subs|dub|cz|sk|en|nc|op|ed)$|^[0-9a-f]{6,8}$/i;
-  const groups = [];
-  for (const p of s.split(/\s*\+\s*/)) {
-    const b = p.match(/\[([^\]]+)\]/);
-    let g = b ? b[1].trim() : (p.trim().match(/^[\w][\w.\-]*/) || [''])[0];
-    g = g.replace(/-\d+$/, '').trim();
-    if (g && !junk.test(g)) groups.push(g);
-  }
-  const uniq = [...new Set(groups)];
-  return uniq.length ? uniq.join(' + ') : String(raw).trim();
-}
-
 // akihabara.db — samostatný statický archiv (mrtvý web anime.akihabara.cz).
 // READ-ONLY: jen čteme, žádné zápisy. Když soubor chybí, akiDb = null a
 // všechny akihabara dotazy se přeskočí (služba běží dál jen s hiyori).
@@ -123,6 +103,15 @@ function ensureColumn(table, column, type) {
 }
 ensureColumn('subs', 'r2_key', 'TEXT');
 ensureColumn('subs', 'manual_add', 'INTEGER DEFAULT 0');
+// machine_of = sub_id původního titulku, ze kterého tenhle vznikl přečasem na
+// BD („BD auto"). NULL u běžných záznamů. Umožní schovat strojové verze z
+// hlavního výpisu a zobrazit je na webu pod původním řádkem.
+ensureColumn('subs', 'machine_of', 'INTEGER');
+db.exec('CREATE INDEX IF NOT EXISTS idx_subs_machine_of ON subs(machine_of)');
+// machine_source = odkud pochází originál strojové verze ('hiyori' | 'akihabara').
+// Rozlišuje ID prostory (hiyori sub_id vs archivní akihabara_id se můžou krýt),
+// aby vazba machine_of byla jednoznačná. NULL u legacy řádků bereme jako hiyori.
+ensureColumn('subs', 'machine_source', 'TEXT');
 
 // --- meta helpers ---
 const _getMeta = db.prepare('SELECT value FROM meta WHERE key=?');
@@ -318,7 +307,11 @@ export const recentSubs = (limit = 100) =>
 
 // stránkovaný výpis s volitelným hledáním podle názvu anime
 export function listSubs({ limit = 100, offset = 0, q = null } = {}) {
-  const where = q ? "WHERE anime_title LIKE @like" : '';
+  // Strojové verze (machine_of != NULL) se v hlavním výpisu NEzobrazují jako
+  // samostatné řádky — patří pod svůj původní titulek (rozbalovací „přečas ▸").
+  const conds = ['machine_of IS NULL'];
+  if (q) conds.push('anime_title LIKE @like');
+  const where = 'WHERE ' + conds.join(' AND ');
   const like = q ? `%${q}%` : null;
   const rows = db
     .prepare(
@@ -330,6 +323,54 @@ export function listSubs({ limit = 100, offset = 0, q = null } = {}) {
     .prepare(`SELECT COUNT(*) AS c FROM subs ${where}`)
     .get({ like }).c;
   return { rows, total };
+}
+
+// ── Strojové verze („BD auto") ──────────────────────────────────────────
+// Deterministické ID machine záznamu = pevná báze + sub_id originálu.
+// Díky tomu je přečas idempotentní (druhý klik přepíše týž řádek) a pásmo
+// (2e9+) nekoliduje s reálnými ID (hiyori malá, archivy < ~1e9).
+export const MACHINE_ID_BASE = 2_000_000_000;      // hiyori originály
+export const MACHINE_ID_BASE_AKI = 3_000_000_000;  // archiv (akihabara.db) originály
+export const machineIdFor = (originalId, source = 'hiyori') =>
+  (source === 'akihabara' ? MACHINE_ID_BASE_AKI : MACHINE_ID_BASE) + Number(originalId);
+
+const _saveMachineSub = db.prepare(`
+  INSERT OR REPLACE INTO subs
+    (sub_id, hiyori_id, anilist_id, mal_id, anime_title, episode, lang, group_id,
+     group_name, release, version, kind, url, extern_domain, added_date, first_seen,
+     status, error, filename, local_path, file_bytes, r2_key, downloaded_at,
+     manual_add, machine_of, machine_source)
+  VALUES
+    (@sub_id, @hiyori_id, @anilist_id, @mal_id, @anime_title, @episode, @lang, NULL,
+     'BD auto', @release, 'BD auto', 'machine', NULL, NULL, NULL, @first_seen,
+     'downloaded', NULL, @filename, NULL, @file_bytes, @r2_key, @downloaded_at,
+     0, @machine_of, @machine_source)
+`);
+export function saveMachineSub(row) {
+  const now = new Date().toISOString();
+  return _saveMachineSub.run({
+    first_seen: now,
+    downloaded_at: now,
+    machine_source: 'hiyori',
+    ...row,
+  });
+}
+
+// Pro sadu sub_id vrátí mapu { original_sub_id: machineRow } — web podle ní
+// vykreslí rozbalovací „přečas ▸" jen u řádků, které strojovou verzi mají.
+export function machineVersionsFor(subIds, source = 'hiyori') {
+  const ids = (subIds || []).map(Number).filter(Number.isFinite);
+  if (!ids.length) return {};
+  const qs = ids.map(() => '?').join(',');
+  const rows = db
+    .prepare(
+      `SELECT * FROM subs WHERE machine_of IN (${qs})
+         AND COALESCE(machine_source,'hiyori')=?`
+    )
+    .all(...ids, source);
+  const map = {};
+  for (const r of rows) map[r.machine_of] = r;
+  return map;
 }
 
 // smazání záznamu z DB (soubor na R2 zůstává). Vrací počet smazaných řádků.
@@ -471,7 +512,7 @@ export function allSubs() {
       sub_id: r.sub_id,
       lang: r.lang,
       group: r.group_name,
-      release: releaseGroup(r.release),
+      release: r.release,
       version: r.version,
       source: r.extern_domain || 'hiyori',
       r2_key: r.r2_key, // server z něj udělá gz_url
@@ -578,7 +619,7 @@ export function subsAvailability({ anilist = null, mal = null, episode = null })
       epMap.get(r.episode).push({
         lang: r.lang,
         group: r.group_name,
-        release: releaseGroup(r.release),
+        release: r.release,
         source: r.extern_domain || 'hiyori',
       });
     }
@@ -670,20 +711,29 @@ export function akihabaraAnimeDetail(anilistId) {
   try {
     const rows = akiDb
       .prepare(
-        "SELECT episode, lang, group_name, release, filename " +
+        "SELECT akihabara_id, episode, lang, group_name, release, filename, r2_key " +
         "FROM subs WHERE anilist_id=@id AND r2_key IS NOT NULL AND r2_key<>'' " +
         "ORDER BY episode, lang, group_name"
       )
       .all({ id: anilistId });
 
+    // strojové verze (BD auto) těchhle archivních titulků — leží v HLAVNÍ subs
+    // tabulce (machine_source='akihabara', machine_of=akihabara_id).
+    const machines = machineVersionsFor(rows.map((r) => r.akihabara_id), 'akihabara');
+
     // seskup po epizodě
     const epMap = new Map();
     for (const r of rows) {
       if (!epMap.has(r.episode)) epMap.set(r.episode, []);
+      const m = machines[r.akihabara_id];
       epMap.get(r.episode).push({
+        id: r.akihabara_id,
         lang: r.lang,
         group: r.group_name,
         release: r.release,
+        machine: m
+          ? { sub_id: m.sub_id, release: m.release, file_bytes: m.file_bytes }
+          : null,
       });
     }
     const episodes = [...epMap.entries()]
@@ -694,6 +744,20 @@ export function akihabaraAnimeDetail(anilistId) {
   } catch (e) {
     console.error('[akihabara] akihabaraAnimeDetail chyba:', e.message);
     return { episodes: [] };
+  }
+}
+
+// Jeden archivní titulek podle akihabara_id (pro přečas z archivu). Vrací i
+// anidb_id (z importu) — když je, přečas přeskočí indexer.
+export function getAkiSub(akihabaraId) {
+  if (!akiDb) return null;
+  try {
+    return akiDb
+      .prepare('SELECT * FROM subs WHERE akihabara_id=?')
+      .get(Number(akihabaraId)) || null;
+  } catch (e) {
+    console.error('[akihabara] getAkiSub chyba:', e.message);
+    return null;
   }
 }
 
