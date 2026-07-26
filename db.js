@@ -342,7 +342,7 @@ const _saveMachineSub = db.prepare(`
      manual_add, machine_of, machine_source)
   VALUES
     (@sub_id, @hiyori_id, @anilist_id, @mal_id, @anime_title, @episode, @lang, NULL,
-     'BD auto', @release, 'BD auto', 'machine', NULL, NULL, NULL, @first_seen,
+     @group_name, @release, 'BD auto', 'machine', NULL, NULL, NULL, @first_seen,
      'downloaded', NULL, @filename, NULL, @file_bytes, @r2_key, @downloaded_at,
      0, @machine_of, @machine_source)
 `);
@@ -352,6 +352,7 @@ export function saveMachineSub(row) {
     first_seen: now,
     downloaded_at: now,
     machine_source: 'hiyori',
+    group_name: null,
     ...row,
   });
 }

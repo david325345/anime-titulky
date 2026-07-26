@@ -402,6 +402,7 @@ function akiSubUnified(row) {
     anime_title: row.anime_title,
     episode: row.episode,
     lang: row.lang,
+    group_name: row.group_name,
     release: row.release,
     filename: row.filename,
     r2_key: row.r2_key,
