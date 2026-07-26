@@ -14,6 +14,12 @@ export class RateLimited extends Error {
   constructor(msg) { super(msg); this.name = 'RateLimited'; }
 }
 
+// Vypršel login/cookie pro daný web. Nemá smysl zkoušet další titulky z TÉHOŽ
+// webu v tomto běhu — stahovací smyčka podle toho přeskočí zbytek té domény.
+export class AuthExpired extends Error {
+  constructor(msg, domain) { super(msg); this.name = 'AuthExpired'; this.domain = domain || null; }
+}
+
 // náhodná pauza v rozsahu (jitter) — pravidelný rytmus je pro rate-limiter čitelný
 export function throttle() {
   let min = CONFIG.delayMinMs;
