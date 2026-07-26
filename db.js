@@ -11,6 +11,26 @@ export const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
 db.pragma('busy_timeout = 8000');
 
+// releaseGroup(raw) — z dlouhého release stringu vytáhne jen skupinu (pro addon/Stremio label).
+// "[SubsPlease] Solo Leveling - 18 (720p) [ABCD]" -> "SubsPlease"
+// "(SubPlease + [Erai-raws]-1080)" -> "SubPlease + Erai-raws"
+// Konzervativní: když nenajde čistou skupinu (BD/Bluray/BDRip…), vrátí originál. NEMĚNÍ DB, jen výstup.
+export function releaseGroup(raw) {
+  if (!raw) return raw;
+  let s = String(raw).trim();
+  if (/^\(.*\)$/.test(s)) s = s.slice(1, -1).trim(); // odsekni obalové ()
+  const junk = /^(\d{3,4}p|x26[45]|h\.?26[45]|hevc|avc|web|web-?dl|webrip|bd|bdrip|blu-?ray|remux|aac\d?|ddp?\d?|eac3|flac|opus|multi|dual|\d+bit|nf|amzn|dsnp|hulu|cr|sub|subs|dub|cz|sk|en|nc|op|ed)$|^[0-9a-f]{6,8}$/i;
+  const groups = [];
+  for (const p of s.split(/\s*\+\s*/)) {
+    const b = p.match(/\[([^\]]+)\]/);
+    let g = b ? b[1].trim() : (p.trim().match(/^[\w][\w.\-]*/) || [''])[0];
+    g = g.replace(/-\d+$/, '').trim();
+    if (g && !junk.test(g)) groups.push(g);
+  }
+  const uniq = [...new Set(groups)];
+  return uniq.length ? uniq.join(' + ') : String(raw).trim();
+}
+
 // akihabara.db — samostatný statický archiv (mrtvý web anime.akihabara.cz).
 // READ-ONLY: jen čteme, žádné zápisy. Když soubor chybí, akiDb = null a
 // všechny akihabara dotazy se přeskočí (služba běží dál jen s hiyori).
@@ -451,7 +471,7 @@ export function allSubs() {
       sub_id: r.sub_id,
       lang: r.lang,
       group: r.group_name,
-      release: r.release,
+      release: releaseGroup(r.release),
       version: r.version,
       source: r.extern_domain || 'hiyori',
       r2_key: r.r2_key, // server z něj udělá gz_url
@@ -558,7 +578,7 @@ export function subsAvailability({ anilist = null, mal = null, episode = null })
       epMap.get(r.episode).push({
         lang: r.lang,
         group: r.group_name,
-        release: r.release,
+        release: releaseGroup(r.release),
         source: r.extern_domain || 'hiyori',
       });
     }

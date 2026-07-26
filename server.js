@@ -8,7 +8,7 @@ import { runOnce, downloadOnce, downloadSingle, isRunning, ingestAnime, addManua
 import {
   overviewCounts, recentSubs, recentRuns, getMeta, getSub, findSubs, subsAvailability,
   listSubs, deleteSub, recentlyAdded, markDownloaded, allSubs, updateSubMeta,
-  listAkihabaraAnime, akihabaraAnimeDetail, akihabaraStats, resetSubDownload,
+  listAkihabaraAnime, akihabaraAnimeDetail, akihabaraStats, resetSubDownload, releaseGroup,
 } from './db.js';
 import * as hanabi from './scraper/sources/hanabi.js';
 import { saveSubFile } from './scraper/download.js';
@@ -68,7 +68,7 @@ app.get('/api/subs', (req, res) => {
     sub_id: r.sub_id,
     lang: r.lang,
     group: r.group_name,
-    release: r.release,
+    release: releaseGroup(r.release),
     version: r.version,
     episode: r.episode,
     kind: r.kind,
