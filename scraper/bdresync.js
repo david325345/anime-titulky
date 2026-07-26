@@ -140,6 +140,19 @@ function groupFromTitle(title) {
   return m ? m[1].trim() : null;
 }
 
+// Obsah [závorky], co je TECH SPEC (ne grupa): rozlišení/kodek/BluRay/audio…
+const TECHSPEC_RE = /\b(1080p|720p|480p|540p|2160p|4k|x264|x265|hevc|avc|h\.?26[45]|blu-?ray|bdrip|\bbd\b|dvd|web-?dl|dual[- ]?audio|\baudio\b|flac|aac|opus|ac3|eac3|ddp?|10-?bit|8-?bit|hi10p?|av1|remux|hdr|ma10p|multi)\b/i;
+
+// Grupa z názvu torrentu: první [..], co NEvypadá jako tech spec.
+function groupFromName(name) {
+  const brackets = (name || '').match(/\[([^\]]+)\]/g) || [];
+  for (const b of brackets) {
+    const inner = b.slice(1, -1).trim();
+    if (inner && !TECHSPEC_RE.test(inner)) return inner;
+  }
+  return null;
+}
+
 // číslo dílu z názvu souboru/releasu (opatrně — radši null než špatně)
 // special/OVA/S00/NCED… = NENÍ řadový díl sezóny → při párování řadového dílu vynech.
 const SPECIAL_RE = /\bS00\b|\bspecials?\b|\bOVA\b|\bOAD\b|\bOAV\b|\bNC(ED|OP)\b|picture drama|creditless|\bmenus?\b/i;
@@ -208,7 +221,7 @@ async function indexerReleases(sub) {
   return rankReleases(
     tr.map((t) => ({
       at_id: t.at_id,
-      group: t.group_name || groupFromTitle(t.name) || '', // grupa z názvu torrentu, když ji indexer u dílu nemá
+      group: t.group_name || groupFromName(t.name) || '', // grupa z názvu torrentu (přeskočí tech-spec [..]), když ji indexer nemá
       name: t.name || '',
       seeders: Number(t.seeders) || 0,
       kind: detectKind(t.name, t.video_source),
