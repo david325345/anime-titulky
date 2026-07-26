@@ -183,7 +183,7 @@ async function collectCandidates(releases, episode) {
       for (const { a } of scored) {
         if (seen.has(a.id)) continue;
         seen.add(a.id);
-        out.push({ attachId: a.id, releaseTitle: rel.title, group: rel.group });
+        out.push({ attachId: a.id, releaseTitle: rel.title, fileName: f.filename, group: rel.group });
       }
     }
   }
@@ -339,9 +339,10 @@ export async function bdResync(sub, source = 'hiyori') {
     try { refXz = await downloadAttachXz(cand.attachId); } catch { continue; }
     const sync = await callSubsync(refXz, 'ref.xz', cz.czBuf, cz.czName);
     if (sync.ok && sync.output) {
-      const saved = await saveMachine(sub, sync.output, cand.releaseTitle, source, cand.kind);
+      const refLabel = cand.fileName || cand.releaseTitle; // konkrétní soubor, ne batch
+      const saved = await saveMachine(sub, sync.output, refLabel, source, cand.kind);
       return {
-        ok: true, anidb, kind: cand.kind, release: cand.releaseTitle, group: cand.group,
+        ok: true, anidb, kind: cand.kind, release: refLabel, group: cand.group,
         episode: sub.episode, format: sync.format, elapsed_ms: sync.elapsed_ms,
         machine_sub_id: saved.machineId, file_bytes: saved.bytes, tried,
       };
