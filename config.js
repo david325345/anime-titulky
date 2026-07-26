@@ -43,17 +43,6 @@ export const CONFIG = {
   // min. rozestup (ms) mezi requesty na TÝŽ web (per-doména brzda proti banu)
   perHostDelayMs: Number(process.env.PER_HOST_DELAY_MS || 4000),
 
-  // per-web override rozestupu pro přísnější weby (Google/Blogspot rate-limituje víc).
-  // Klíč = doména bez www. Env PER_HOST_DELAY_OVERRIDES="host=ms,host2=ms2" přepíše/doplní.
-  perHostDelayOverrides: (() => {
-    const map = { 'hannya-subs.blogspot.com': 10000, 'blogspot.com': 10000 };
-    for (const pair of String(process.env.PER_HOST_DELAY_OVERRIDES || '').split(',')) {
-      const [h, ms] = pair.split('=').map((x) => (x || '').trim());
-      if (h && ms && !Number.isNaN(Number(ms))) map[h.replace(/^www\./, '')] = Number(ms);
-    }
-    return map;
-  })(),
-
   // pauza mezi requesty (ms) — základ; skutečná pauza je náhodná v rozsahu min–max
   requestDelayMs: Number(process.env.REQUEST_DELAY_MS || 2000),
   delayMinMs: Number(process.env.DELAY_MIN_MS || 0), // 0 = odvodit z requestDelayMs
@@ -117,6 +106,33 @@ export const CONFIG = {
     user: process.env.GENSUBS_USER || '',
     pass: process.env.GENSUBS_PASS || '',
   },
+
+  // ── Přečas na BD („BD auto") ─────────────────────────────────────────
+  // Indexer (mapování ID) — z anilist/mal získáme anidb_id. Má self-signed
+  // cert, takže se k němu chodí s vypnutou verifikací certu (jen na tenhle host).
+  indexer: {
+    url: (process.env.INDEXER_URL || 'https://indexer.ddnsfree.com').replace(/\/+$/, ''),
+    user: process.env.INDEXER_USER || '',
+    pass: process.env.INDEXER_PASS || '',
+  },
+
+  // subsync — interní HTTP služba (alass přečas) dosažitelná přes docker alias.
+  subsync: {
+    url: (process.env.SUBSYNC_URL || 'http://subsync').replace(/\/+$/, ''),
+  },
+
+  // Anime Tosho — zdroj EN referenčních titulků (extrahované z BD releasů).
+  tosho: {
+    feed: (process.env.TOSHO_FEED || 'https://feed.animetosho.org').replace(/\/+$/, ''),
+    storage: (process.env.TOSHO_STORAGE || 'https://animetosho.org').replace(/\/+$/, ''),
+  },
+
+  // Žebříček BD skupin pro výběr reference (přednost odshora dolů). Když anime
+  // má víc BD releasů se softsuby, vybere se ten s nejvýš postavenou skupinou;
+  // fallback = první nalezený s dialogovou stopou. Přebít jde env (čárkou).
+  bdGroupRanking: (process.env.BD_GROUP_RANKING ||
+    'Commie,KH,Coalgirls,FFF,Vivid,Doki,Chihiro,Underwater,niizk,Kaleido')
+    .split(',').map((s) => s.trim()).filter(Boolean),
 };
 
 export function assertConfig() {
