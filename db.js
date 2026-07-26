@@ -763,6 +763,35 @@ export function getAkiSub(akihabaraId) {
   }
 }
 
+// Cíle HROMADNÉHO přečasu (hlavní subs): stažené díly daného anime, které JEŠTĚ
+// nemají strojovou verzi. Vrací [{sub_id, episode}] seřazené dle dílu.
+export function bulkBdTargetsHiyori(anilistId, malId) {
+  const rows = db
+    .prepare(
+      "SELECT sub_id, episode FROM subs " +
+      "WHERE status='downloaded' AND r2_key IS NOT NULL AND machine_of IS NULL " +
+      "AND ((@anilist IS NOT NULL AND anilist_id=@anilist) " +
+      "     OR (@anilist IS NULL AND @mal IS NOT NULL AND mal_id=@mal)) " +
+      "ORDER BY episode"
+    )
+    .all({ anilist: anilistId ?? null, mal: malId ?? null });
+  const machines = machineVersionsFor(rows.map((r) => r.sub_id), 'hiyori');
+  return rows.filter((r) => !machines[r.sub_id]).map((r) => ({ sub_id: r.sub_id, episode: r.episode }));
+}
+
+// Cíle HROMADNÉHO přečasu (archiv akihabara) dle anilist_id: díly s r2_key bez
+// strojové verze (machine_source='akihabara'). Vrací [{sub_id=akihabara_id, episode}].
+export function bulkBdTargetsAki(anilistId) {
+  if (!akiDb) return [];
+  const rows = akiDb
+    .prepare("SELECT akihabara_id, episode FROM subs WHERE anilist_id=? AND r2_key IS NOT NULL ORDER BY episode")
+    .all(Number(anilistId));
+  const machines = machineVersionsFor(rows.map((r) => r.akihabara_id), 'akihabara');
+  return rows
+    .filter((r) => !machines[r.akihabara_id])
+    .map((r) => ({ sub_id: r.akihabara_id, episode: r.episode }));
+}
+
 // Souhrn archivu pro hlavičku sekce (počet titulků + anime).
 export function akihabaraStats() {
   if (!akiDb) return { subs: 0, anime: 0, enabled: false };

@@ -9,7 +9,7 @@ import {
   overviewCounts, recentSubs, recentRuns, getMeta, getSub, findSubs, subsAvailability,
   listSubs, deleteSub, recentlyAdded, markDownloaded, allSubs, updateSubMeta,
   listAkihabaraAnime, akihabaraAnimeDetail, akihabaraStats, resetSubDownload,
-  machineVersionsFor, getAkiSub,
+  machineVersionsFor, getAkiSub, bulkBdTargetsHiyori, bulkBdTargetsAki,
 } from './db.js';
 import * as hanabi from './scraper/sources/hanabi.js';
 import { saveSubFile } from './scraper/download.js';
@@ -410,6 +410,28 @@ function akiSubUnified(row) {
     status: 'downloaded',
   };
 }
+
+// cíle hromadného přečasu — stažené díly anime bez strojové verze (hlavní tabulka)
+app.get('/api/sub/:subId/bulk-bd-targets', (req, res) => {
+  const ref = getSub(Number(req.params.subId));
+  if (!ref) return res.status(404).json({ error: 'Záznam nenalezen.' });
+  const targets = bulkBdTargetsHiyori(ref.anilist_id, ref.mal_id);
+  res.json({ anime_title: ref.anime_title, total: targets.length, targets });
+});
+
+// cíle hromadného přečasu z archivu — dle reprezentativního akihabara_id
+app.get('/api/akihabara/:akiId/bulk-bd-targets', (req, res) => {
+  const ref = getAkiSub(Number(req.params.akiId));
+  if (!ref) return res.status(404).json({ error: 'Archivní záznam nenalezen.' });
+  const targets = bulkBdTargetsAki(ref.anilist_id);
+  res.json({ anime_title: ref.anime_title, total: targets.length, targets });
+});
+
+// cíle hromadného přečasu z archivu — přímo dle anilist_id (tlačítko „přečasovat vše")
+app.get('/api/akihabara/anime/:anilistId/bulk-bd-targets', (req, res) => {
+  const targets = bulkBdTargetsAki(Number(req.params.anilistId));
+  res.json({ total: targets.length, targets });
+});
 
 app.post('/api/akihabara/:akiId/bd-resync', async (req, res) => {
   const row = getAkiSub(Number(req.params.akiId));
