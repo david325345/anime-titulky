@@ -256,9 +256,16 @@ async function saveMachine(sub, outputText, releaseTitle, source) {
 
 // společný konec: stáhni CZ z R2 → subsync → ulož strojovou verzi
 async function resyncAndSave(sub, refBuf, refName, releaseTitle, source) {
-  const czGz = await r2Get(sub.r2_key);
-  if (!czGz) return { ok: false, stage: 'cz', error: 'CZ titulek se nepodařilo stáhnout z R2.' };
-  const czBuf = zlib.gunzipSync(czGz);
+  const czRaw = await r2Get(sub.r2_key);
+  if (!czRaw || !czRaw.length) {
+    return { ok: false, stage: 'cz', error: 'CZ titulek se nepodařilo stáhnout z R2.' };
+  }
+  // Soubor na R2 může být gzip (hiyori + většina archivu) i plain .ass/.srt
+  // (část archivu se ukládala nezabalená). Rozbal jen když je to fakticky gzip.
+  let czBuf = czRaw;
+  if (czRaw[0] === 0x1f && czRaw[1] === 0x8b) {
+    try { czBuf = zlib.gunzipSync(czRaw); } catch { czBuf = czRaw; }
+  }
   const czName = baseNameOf(sub);
 
   const sync = await callSubsync(refBuf, refName, czBuf, czName);
