@@ -4,8 +4,8 @@
 // ?aid=) → pro vybraný release stáhni dialogovou titulkovou stopu z Anime Tosho
 // (feed ?show=torrent&id=at_id → attachment .xz) → subsync (alass) → strojová
 // verze na R2+DB. Bitmapové (PGS)/neparsovatelné se přeskakují, zkouší se další.
-// Strojovka: group='🤖 <grupa BD ripu>', release=kind (BD/DVD auto),
-// version=název souboru; svázaná machine_of.
+// Strojovka: group=grupa BD ripu (čistá), release='🤖 BD'/'🤖 DVD' (robot místo
+// „BD auto"), version=název souboru; svázaná machine_of.
 // RUČNÍ: reference nahraná uživatelem (přeskočí indexer/Tosho), group=originál.
 //
 // Zdroj (source): 'hiyori' = hlavní tabulka, 'akihabara' = archiv (jiné ID pásmo).
@@ -160,8 +160,8 @@ const BD_LOOSE = /blu-?ray|bdrip|\bbd\b|\bbd\d/i;
 function detectKind(name, videoSource) {
   const n = name || '';
   const vs = (videoSource || '').toLowerCase();
-  if ((DVD_RE.test(n) || vs.includes('dvd')) && !BD_LOOSE.test(n)) return 'DVD auto';
-  return 'BD auto';
+  if ((DVD_RE.test(n) || vs.includes('dvd')) && !BD_LOOSE.test(n)) return '🤖 DVD';
+  return '🤖 BD';
 }
 
 // Řazení releasů: BD před DVD → 'PGS' v názvu dozadu → víc seedů → žebříček skupin.
@@ -173,7 +173,7 @@ function rankReleases(rels) {
   const isPgs = (n) => /pgs/i.test(n || '');
   return [...rels].sort(
     (a, b) =>
-      (a.kind === 'BD auto' ? 0 : 1) - (b.kind === 'BD auto' ? 0 : 1) ||
+      (a.kind === '🤖 BD' ? 0 : 1) - (b.kind === '🤖 BD' ? 0 : 1) ||
       (isPgs(a.name) ? 1 : 0) - (isPgs(b.name) ? 1 : 0) ||
       b.seeders - a.seeders ||
       rank(a.group) - rank(b.group)
@@ -290,7 +290,7 @@ function baseNameOf(sub) {
     .replace(/^\d+__/, ''); // odsekni prefix ID z původního jména
 }
 
-async function saveMachine(sub, outputText, releaseTitle, source, kind = 'BD auto', groupName = null) {
+async function saveMachine(sub, outputText, releaseTitle, source, kind = '🤖 BD', groupName = null) {
   if (!r2Enabled()) throw new Error('R2 není nastaveno — strojovou verzi není kam uložit.');
   const machineId = machineIdFor(sub.sub_id, source);
   const outBuf = Buffer.from(outputText, 'utf8');
@@ -315,7 +315,7 @@ async function saveMachine(sub, outputText, releaseTitle, source, kind = 'BD aut
     episode: sub.episode ?? null,
     lang: sub.lang ?? null,
     group_name: groupName ?? sub.group_name ?? null, // AUTO: 🤖 grupa BD ripu; RUČNÍ: originál
-    release: kind,                      // 'BD auto' / 'DVD auto' → addon ukazuje tohle
+    release: kind,                      // '🤖 BD' / '🤖 DVD' → addon ukazuje tohle
     version: releaseTitle,              // název ripu / ruční ref → jen pro web (addon version neukazuje)
     filename: outName,
     file_bytes: outBuf.length,
@@ -338,7 +338,7 @@ async function loadCz(sub) {
 }
 
 // společný konec pro RUČNÍ referenci: CZ z R2 → subsync → ulož strojovou verzi
-async function resyncAndSave(sub, refBuf, refName, releaseTitle, source, kind = 'BD auto') {
+async function resyncAndSave(sub, refBuf, refName, releaseTitle, source, kind = '🤖 BD') {
   const cz = await loadCz(sub);
   if (!cz) return { ok: false, stage: 'cz', error: 'CZ titulek se nepodařilo stáhnout z R2.' };
   const sync = await callSubsync(refBuf, refName, cz.czBuf, cz.czName);
@@ -389,10 +389,9 @@ export async function bdResync(sub, source = 'hiyori') {
       try { refXz = await downloadAttachXz(attId); } catch { continue; }
       const sync = await callSubsync(refXz, 'ref.xz', cz.czBuf, cz.czName);
       if (sync.ok && sync.output) {
-        const groupName = `🤖 ${rel.group}`.trim(); // grupa BD ripu (i ve Stremiu)
-        const saved = await saveMachine(sub, sync.output, ea.fileName, source, rel.kind, groupName);
+        const saved = await saveMachine(sub, sync.output, ea.fileName, source, rel.kind, rel.group || null);
         return {
-          ok: true, via, kind: rel.kind, release: ea.fileName, group: groupName,
+          ok: true, via, kind: rel.kind, release: ea.fileName, group: rel.group,
           seeders: rel.seeders, episode: sub.episode, format: sync.format, elapsed_ms: sync.elapsed_ms,
           machine_sub_id: saved.machineId, file_bytes: saved.bytes, tried,
         };
