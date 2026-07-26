@@ -15,9 +15,11 @@ function hostOf(urlOrHost) {
 
 // Zavolej PŘED requestem: await hostGate(url). Zajistí min. rozestup pro danou doménu.
 export async function hostGate(urlOrHost) {
-  const delay = CONFIG.perHostDelayMs;
-  if (!delay || delay <= 0) return;
   const host = hostOf(urlOrHost);
+  // per-web override (přísnější weby jako Blogspot), jinak globální default
+  const overrides = CONFIG.perHostDelayOverrides || {};
+  const delay = overrides[host] ?? CONFIG.perHostDelayMs;
+  if (!delay || delay <= 0) return;
 
   const prev = chains.get(host) || Promise.resolve(0);
   // naplánuj svůj slot: počkej na předchozí, pak drž doménu obsazenou po dobu delay
