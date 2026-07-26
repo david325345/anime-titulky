@@ -4,7 +4,7 @@ import { getFeed } from './feed.js';
 import { getDetail } from './detail.js';
 import { downloadDirect } from './download.js';
 import { downloadExtern, hasSourceFor } from './sources/index.js';
-import { sleep, throttle, RateLimited } from './http.js';
+import { sleep, throttle, RateLimited, AuthExpired } from './http.js';
 import {
   getMeta, setMeta, upsertAnime, insertSub, getSub,
   markDownloaded, markFailed, startRun, finishRun,
@@ -175,9 +175,19 @@ async function downloadQueue({ log, stats }) {
     (perHostSummary ? ` (max ${CONFIG.maxDownloadsPerHost}/web — ${perHostSummary})` : '')
   );
 
+  // weby, kde v TOMTO běhu vypršel login/cookie → zbytek té domény přeskočíme
+  // (nemá smysl mlátit do mrtvé cookie a plodit desítky „chyba" řádků)
+  const deadDomains = new Set();
+  const domainOf = (s) => (s.kind === 'direct' ? 'hiyori.cz' : s.extern_domain || '?');
+
   for (const subId of batch) {
     const sub = getSub(subId);
     if (!sub) continue;
+    const dom = domainOf(sub);
+    if (deadDomains.has(dom)) {
+      // login pro tento web už padl → nech titulek čekat (neoznačuj chybou), zkusí se po obnově cookie
+      continue;
+    }
     try {
       let res;
       if (sub.kind === 'direct') {
@@ -199,6 +209,14 @@ async function downloadQueue({ log, stats }) {
       if (e instanceof RateLimited) {
         log('  ⛔ ' + e.message + ' — utínám stahování.');
         throw e;
+      }
+      if (e instanceof AuthExpired) {
+        // vypršelá cookie/session → označ tenhle titulek a přeskoč zbytek téhož webu
+        markFailed(subId, e.message);
+        stats.failed++;
+        deadDomains.add(e.domain || dom);
+        log(`  🔒 ${e.domain || dom}: ${e.message} → přeskakuji zbylé titulky z tohoto webu v tomto běhu.`);
+        continue;
       }
       markFailed(subId, e.message);
       stats.failed++;
