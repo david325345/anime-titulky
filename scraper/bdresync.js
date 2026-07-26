@@ -129,11 +129,17 @@ function groupFromTitle(title) {
 }
 
 // číslo dílu z názvu souboru/releasu (opatrně — radši null než špatně)
+// special/OVA/S00/NCED… = NENÍ řadový díl sezóny → při párování řadového dílu vynech.
+const SPECIAL_RE = /\bS00\b|\bspecials?\b|\bOVA\b|\bOAD\b|\bOAV\b|\bNC(ED|OP)\b|picture drama|creditless|\bmenus?\b/i;
+const isSpecial = (name) => SPECIAL_RE.test(name || '');
+
 function episodeFromName(name) {
   const s = name || '';
+  // SxxEyy — respektuj SEZÓNU: S00 (special) není řadový díl → null
+  const se = s.match(/\bS(\d{1,2})E(\d{1,3})\b/i);
+  if (se) return Number(se[1]) === 0 ? null : Number(se[2]);
   const pats = [
     /\s-\s(\d{1,3})(?:v\d)?\s(?:-|\[|\()/, //  " - 01 - " / " - 01 [" / " - 01 ("
-    /\bS\d{1,2}E(\d{1,3})\b/i, //  S01E01
     /\bEP?\.?\s?(\d{1,3})\b/i, //  E01 / EP01 / EP 1
     /\s(\d{1,3})(?:v\d)?\s(?:-|\[|\()/, //  " 01 [" / " 01 ("
   ];
@@ -159,10 +165,12 @@ async function collectCandidates(releases, episode) {
   const out = [];
   const seen = new Set();
   for (const rel of sorted.slice(0, 8)) {
+    if (isSpecial(rel.title)) continue; // celý special/OVA/S00 release přeskoč
     let data;
     try { data = await toshoJson(`show=torrent&id=${rel.id}`); } catch { continue; }
     const files = Array.isArray(data) ? data : data.files || [];
     for (const f of files) {
+      if (isSpecial(f.filename)) continue; // special/OVA soubor v batchi přeskoč
       let ep = episodeFromName(f.filename);
       if (ep == null && files.length === 1) ep = episodeFromName(rel.title);
       if (ep !== episode) continue;
