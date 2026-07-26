@@ -244,7 +244,8 @@ async function saveMachine(sub, outputText, releaseTitle, source) {
     anime_title: sub.anime_title ?? null,
     episode: sub.episode ?? null,
     lang: sub.lang ?? null,
-    release: releaseTitle,
+    group_name: sub.group_name ?? null, // jako originál (skupina zůstává)
+    release: 'BD auto',                 // release = BD auto (bez info o ripu)
     filename: outName,
     file_bytes: outBuf.length,
     r2_key,
