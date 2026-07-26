@@ -173,3 +173,32 @@ button.reset-sub:disabled { opacity: .4; cursor: default; }
 .aki-eps { display: flex; flex-direction: column; gap: 0.25em; font-size: 0.9em; }
 .aki-ep { line-height: 1.4; }
 .aki-ep b { color: var(--accent, #6cf); margin-right: 0.3em; }
+
+/* ── Přečas na BD (BD auto) ─────────────────────────────────────────── */
+button.bd-resync {
+  background: #2a3a2f; border: 1px solid #4a7c5c; color: #b8f0c8;
+  padding: 3px 8px; font-size: 13px; border-radius: 6px; cursor: pointer; margin-right: 4px;
+}
+button.bd-resync:hover { background: rgba(90,200,140,.16); border-color: #5cc08c; }
+button.bd-resync:disabled { opacity: .5; cursor: default; }
+
+button.machine-toggle {
+  background: transparent; border: 1px solid #3a5a44; color: #8fd8a8;
+  padding: 3px 8px; font-size: 12px; border-radius: 6px; cursor: pointer; margin-right: 4px;
+}
+button.machine-toggle:hover { background: rgba(90,200,140,.12); }
+
+tr.machine-row td.machine-cell {
+  background: rgba(90,200,140,.06);
+  font-size: 13px; color: #cfe8d6; padding: 6px 10px 6px 14px;
+}
+.machine-pill { background: #2f5a3f; color: #c8f5d8; }
+tr.machine-row a { color: #9fd8ff; }
+
+/* přečas na BD — okno (recykluje .edit-modal) + odkazy */
+.bd-modal-hint { margin: 0 0 12px; font-size: 13px; color: var(--muted); line-height: 1.4; }
+.bd-modal-status { min-height: 18px; margin: 0 0 12px; font-size: 13px; color: var(--accent); }
+.bd-modal .edit-modal-actions { flex-wrap: wrap; gap: 8px; }
+.machine-dl { font-size: 12px; color: var(--accent); text-decoration: none; }
+.machine-dl:hover { text-decoration: underline; }
+button.bd-resync { cursor: pointer; }

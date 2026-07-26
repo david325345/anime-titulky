@@ -90,8 +90,8 @@ function renderSubs(subs) {
       <td class="nowrap">${statusCell(s)}</td>
       <td class="nowrap">${onR2}</td>
       <td class="nowrap">${dl}</td>
-      <td class="nowrap">${dlNowBtn}${uploadBtn}${canDelete ? `<button class="edit-sub" data-id="${s.sub_id}" data-group="${esc(s.group_name || '')}" data-release="${esc(s.release || '')}" data-lang="${esc(s.lang || '')}" title="Upravit fansub / release / jazyk">✏️</button>` : ''}${canDelete ? `<button class="del" data-id="${s.sub_id}" title="Smazat záznam z DB (na R2 zůstává)">✖</button>` : ''}${(canDelete && s.r2_key) ? `<button class="del-r2" data-id="${s.sub_id}" title="Smazat úplně (DB i soubor na R2)">🗑</button>` : ''}${(canDelete && s.status === 'downloaded') ? `<button class="reset-sub" data-id="${s.sub_id}" title="Smazat soubor z R2 a vrátit mezi nestažené (pak jde nahrát správný přes 📤)">♻</button>` : ''}</td>
-    </tr>`;
+      <td class="nowrap">${(s.status === 'downloaded' && s.r2_key) ? `<button class="bd-resync" data-id="${s.sub_id}" data-source="hiyori" title="Přečasovat na BD časování (BD auto)">⏱</button>` : ''}${s.machine ? `<button class="machine-toggle" data-id="${s.sub_id}" title="Zobrazit strojovou verzi (BD auto)">přečas ▸</button>` : ''}${dlNowBtn}${uploadBtn}${canDelete ? `<button class="edit-sub" data-id="${s.sub_id}" data-group="${esc(s.group_name || '')}" data-release="${esc(s.release || '')}" data-lang="${esc(s.lang || '')}" title="Upravit fansub / release / jazyk">✏️</button>` : ''}${(canDelete && s.r2_key) ? `<button class="del-r2" data-id="${s.sub_id}" title="Smazat úplně (DB i soubor na R2)">🗑</button>` : ''}${(canDelete && s.status === 'downloaded') ? `<button class="reset-sub" data-id="${s.sub_id}" title="Smazat soubor z R2 a vrátit mezi nestažené (pak jde nahrát správný přes 📤)">♻</button>` : ''}</td>
+    </tr>${s.machine ? `<tr class="machine-row" data-for="${s.sub_id}" hidden><td></td><td colspan="10" class="machine-cell"><span class="pill machine-pill">BD auto</span> ${esc(s.machine.release || '')} · ${((s.machine.file_bytes || 0) / 1024).toFixed(1)} KB · <a href="/api/file/${s.machine.sub_id}">stáhnout</a></td></tr>` : ''}`;
   }).join('') || `<tr><td colspan="11" class="muted">Nic nenalezeno.</td></tr>`;
 }
 
@@ -340,6 +340,82 @@ function openEditModal(ed) {
   });
 }
 
+// ── Přečas na BD: okno s volbou auto / ruční reference ──────────────────
+function bdEndpoints(id, source) {
+  const base = source === 'akihabara' ? `/api/akihabara/${id}` : `/api/sub/${id}`;
+  return { auto: `${base}/bd-resync`, manual: `${base}/bd-resync-manual` };
+}
+function bdRefresh(source) {
+  if (source === 'akihabara') { for (const id of akiExpanded) loadAkiDetail(id); }
+  else { loadSubs(); loadOverview(); }
+}
+function bdReport(r) {
+  if (r && r.ok) {
+    alert('✔ Přečas hotový (BD auto)\n' +
+      (r.release ? `Release: ${r.release}\n` : '') +
+      `Díl ${r.episode ?? '—'} · formát ${r.format} · ${r.elapsed_ms} ms`);
+    return true;
+  }
+  alert('✘ Přečas se nepovedl: ' + ((r && r.error) || 'neznámá chyba'));
+  return false;
+}
+function openBdModal(id, source) {
+  const ep = bdEndpoints(id, source);
+  const overlay = document.createElement('div');
+  overlay.className = 'edit-modal-overlay';
+  overlay.innerHTML = `
+    <div class="edit-modal bd-modal">
+      <h3>Přečas na BD (BD auto)</h3>
+      <p class="bd-modal-hint">Automaticky najde referenci na Anime Tosho, nebo nahraj vlastní BD referenci (.ass/.srt).</p>
+      <div class="bd-modal-status" id="bd-status"></div>
+      <div class="edit-modal-actions">
+        <button type="button" class="btn-secondary" id="bd-cancel">Zavřít</button>
+        <button type="button" id="bd-manual">Nahrát ručně</button>
+        <button type="button" id="bd-auto">Automaticky (Tosho)</button>
+      </div>
+      <input type="file" id="bd-file" accept=".ass,.srt,.ssa,.xz" hidden />
+    </div>`;
+  document.body.appendChild(overlay);
+
+  const close = () => overlay.remove();
+  const status = overlay.querySelector('#bd-status');
+  const setBusy = (msg) => {
+    status.textContent = msg;
+    overlay.querySelectorAll('button').forEach((b) => (b.disabled = true));
+  };
+  overlay.addEventListener('click', (ev) => { if (ev.target === overlay) close(); });
+  overlay.querySelector('#bd-cancel').addEventListener('click', close);
+
+  overlay.querySelector('#bd-auto').addEventListener('click', async () => {
+    setBusy('Hledám BD na Toshu a přečasovávám… (může to chvíli trvat)');
+    try {
+      const r = await (await fetch(ep.auto, { method: 'POST' })).json();
+      close();
+      if (bdReport(r)) bdRefresh(source);
+    } catch (err) { close(); alert('Chyba: ' + err.message); }
+  });
+
+  overlay.querySelector('#bd-manual').addEventListener('click', () => {
+    overlay.querySelector('#bd-file').click();
+  });
+  overlay.querySelector('#bd-file').addEventListener('change', async (ev) => {
+    const file = ev.target.files[0];
+    if (!file) return;
+    setBusy('Přečasovávám podle nahrané reference…');
+    try {
+      const buf = await file.arrayBuffer();
+      const url = `${ep.manual}?filename=${encodeURIComponent(file.name)}`;
+      const r = await (await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: buf,
+      })).json();
+      close();
+      if (bdReport(r)) bdRefresh(source);
+    } catch (err) { close(); alert('Chyba: ' + err.message); }
+  });
+}
+
 $('#subsTable').addEventListener('click', async (e) => {
   // editace metadat — tužka → modal
   const ed = e.target.closest('button.edit-sub');
@@ -478,17 +554,25 @@ $('#subsTable').addEventListener('click', async (e) => {
     return;
   }
 
-  // mazání záznamu (jen DB)
-  const btn = e.target.closest('button.del');
-  if (!btn) return;
-  const id = btn.dataset.id;
-  if (!confirm('Smazat tento záznam z DB? (soubor na R2 zůstane)')) return;
-  btn.disabled = true;
-  try {
-    await fetch(`/api/sub/${id}`, { method: 'DELETE' });
-    loadSubs();
-    loadOverview();
-  } catch (e) { btn.disabled = false; }
+  // rozbalit / schovat strojovou verzi (BD auto)
+  const mt = e.target.closest('button.machine-toggle');
+  if (mt) {
+    const id = mt.dataset.id;
+    const row = document.querySelector(`tr.machine-row[data-for="${id}"]`);
+    if (row) {
+      const show = row.hasAttribute('hidden');
+      if (show) row.removeAttribute('hidden'); else row.setAttribute('hidden', '');
+      mt.textContent = show ? 'přečas ▾' : 'přečas ▸';
+    }
+    return;
+  }
+
+  // přečas na BD — otevři okno s volbou auto / ruční reference
+  const bd = e.target.closest('button.bd-resync');
+  if (bd) {
+    openBdModal(bd.dataset.id, bd.dataset.source || 'hiyori');
+    return;
+  }
 });
 
 // ==================================================================
@@ -564,7 +648,9 @@ async function loadAkiDetail(anilistId) {
         const variants = ep.subs.map((s) => {
           const g = s.group ? ` [${esc(s.group)}]` : '';
           const r = s.release ? ` · ${esc(s.release)}` : '';
-          return `${esc(s.lang)}${g}${r}`;
+          const bd = s.id ? ` <button class="bd-resync" data-id="${s.id}" data-source="akihabara" title="Přečasovat na BD (BD auto)">⏱</button>` : '';
+          const m = s.machine ? ` <a class="machine-dl" href="/api/file/${s.machine.sub_id}" title="Strojová verze (BD auto)">přečas ⬇</a>` : '';
+          return `${esc(s.lang)}${g}${r}${bd}${m}`;
         }).join(' · ');
         const epLabel = ep.episode != null ? `Díl ${ep.episode}` : 'Film';
         return `<div class="aki-ep"><b>${esc(epLabel)}:</b> ${variants}</div>`;
@@ -577,6 +663,8 @@ async function loadAkiDetail(anilistId) {
 
 // klik na řádek anime → rozbalit/sbalit
 $('#akiTable').addEventListener('click', (e) => {
+  const bd = e.target.closest('button.bd-resync');
+  if (bd) { openBdModal(bd.dataset.id, 'akihabara'); return; }
   const row = e.target.closest('tr.aki-anime');
   if (!row) return;
   const id = Number(row.dataset.id);
