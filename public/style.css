@@ -202,3 +202,8 @@ tr.machine-row a { color: #9fd8ff; }
 .machine-dl { font-size: 12px; color: var(--accent); text-decoration: none; }
 .machine-dl:hover { text-decoration: underline; }
 button.bd-resync { cursor: pointer; }
+
+/* hromadný přečas v archivu */
+.aki-bulk-bar { margin: 0 0 8px; }
+.aki-bulk-bd { font-size: 12px; padding: 4px 10px; cursor: pointer; }
+.bd-modal-status { white-space: normal; }

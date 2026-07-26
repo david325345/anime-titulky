@@ -359,6 +359,59 @@ function bdReport(r) {
   alert('✘ Přečas se nepovedl: ' + ((r && r.error) || 'neznámá chyba'));
   return false;
 }
+// ── Hromadný přečas celého anime (synchronně, s průběhem) ──────────────────
+async function runBulkBd(targetsUrl, source) {
+  const overlay = document.createElement('div');
+  overlay.className = 'edit-modal-overlay';
+  overlay.innerHTML = `
+    <div class="edit-modal bd-modal">
+      <h3>Přečas celého anime (🤖 auto)</h3>
+      <p class="bd-modal-hint">Přečasuju všechny stažené díly bez strojové verze, jeden po druhém. Zavřením okno přerušíš.</p>
+      <div class="bd-modal-status" id="bulk-status">Zjišťuji díly k přečasu…</div>
+      <div class="edit-modal-actions">
+        <button type="button" class="btn-secondary" id="bulk-close">Přerušit</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const status = overlay.querySelector('#bulk-status');
+  let cancelled = false;
+  const close = () => { cancelled = true; overlay.remove(); };
+  overlay.addEventListener('click', (ev) => { if (ev.target === overlay) close(); });
+  overlay.querySelector('#bulk-close').addEventListener('click', close);
+
+  let data;
+  try { data = await (await fetch(targetsUrl)).json(); }
+  catch (e) { if (overlay.isConnected) status.textContent = 'Chyba: ' + e.message; return; }
+  const targets = (data && data.targets) || [];
+  if (!targets.length) {
+    if (overlay.isConnected) status.textContent = 'Žádné díly k přečasu (vše hotové nebo nic staženého).';
+    return;
+  }
+
+  let ok = 0;
+  const skipped = [];
+  for (let i = 0; i < targets.length; i++) {
+    if (cancelled) break;
+    const t = targets[i];
+    if (overlay.isConnected)
+      status.textContent = `Přečasovávám ${i + 1}/${targets.length} (díl ${t.episode ?? '—'})… hotovo ${ok}, přeskočeno ${skipped.length}`;
+    const base = source === 'akihabara' ? `/api/akihabara/${t.sub_id}` : `/api/sub/${t.sub_id}`;
+    try {
+      const r = await (await fetch(`${base}/bd-resync`, { method: 'POST' })).json();
+      if (r && r.ok) ok++; else skipped.push(t.episode ?? t.sub_id);
+    } catch { skipped.push(t.episode ?? t.sub_id); }
+    await new Promise((r) => setTimeout(r, 400)); // pauza mezi díly (Tosho/subsync)
+  }
+  bdRefresh(source);
+  if (overlay.isConnected) {
+    status.textContent =
+      `✔ Hotovo ${ok} · přeskočeno ${skipped.length}` +
+      (skipped.length ? ` (díly ${skipped.join(', ')} — auto nenašlo, dober ručně)` : '') +
+      (cancelled ? ' · PŘERUŠENO' : '');
+    overlay.querySelector('#bulk-close').textContent = 'Zavřít';
+  }
+}
+
 function openBdModal(id, source) {
   const ep = bdEndpoints(id, source);
   const overlay = document.createElement('div');
@@ -371,6 +424,7 @@ function openBdModal(id, source) {
       <div class="edit-modal-actions">
         <button type="button" class="btn-secondary" id="bd-cancel">Zavřít</button>
         <button type="button" id="bd-manual">Nahrát ručně</button>
+        <button type="button" id="bd-bulk">Celé anime (auto)</button>
         <button type="button" id="bd-auto">Automaticky (Tosho)</button>
       </div>
       <input type="file" id="bd-file" accept=".ass,.srt,.ssa,.xz" hidden />
@@ -393,6 +447,14 @@ function openBdModal(id, source) {
       close();
       if (bdReport(r)) bdRefresh(source);
     } catch (err) { close(); alert('Chyba: ' + err.message); }
+  });
+
+  overlay.querySelector('#bd-bulk').addEventListener('click', () => {
+    const targetsUrl = source === 'akihabara'
+      ? `/api/akihabara/${id}/bulk-bd-targets`
+      : `/api/sub/${id}/bulk-bd-targets`;
+    close();
+    runBulkBd(targetsUrl, source);
   });
 
   overlay.querySelector('#bd-manual').addEventListener('click', () => {
@@ -643,6 +705,7 @@ async function loadAkiDetail(anilistId) {
       return;
     }
     cell.innerHTML =
+      `<div class="aki-bulk-bar"><button class="aki-bulk-bd" data-anilist="${anilistId}">⏱ Přečasovat vše (auto)</button></div>` +
       '<div class="aki-eps">' +
       d.episodes.map((ep) => {
         const variants = ep.subs.map((s) => {
@@ -663,6 +726,8 @@ async function loadAkiDetail(anilistId) {
 
 // klik na řádek anime → rozbalit/sbalit
 $('#akiTable').addEventListener('click', (e) => {
+  const bulk = e.target.closest('button.aki-bulk-bd');
+  if (bulk) { runBulkBd(`/api/akihabara/anime/${bulk.dataset.anilist}/bulk-bd-targets`, 'akihabara'); return; }
   const bd = e.target.closest('button.bd-resync');
   if (bd) { openBdModal(bd.dataset.id, 'akihabara'); return; }
   const row = e.target.closest('tr.aki-anime');
