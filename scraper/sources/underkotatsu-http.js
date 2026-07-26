@@ -7,8 +7,10 @@
 
 import { CONFIG } from '../../config.js';
 import { hostGate } from '../ratelimit.js';
+import { AuthExpired } from '../http.js';
 
 const BASE = 'https://www.underkotatsusubs.cz';
+const DOMAIN = 'underkotatsusubs.cz';
 
 function cookie() {
   return (process.env.UK_COOKIE || '').trim();
@@ -27,8 +29,9 @@ function headers(extra = {}) {
 
 function assertCookie() {
   if (!cookie()) {
-    throw new Error(
-      'Chybí UK_COOKIE (přihlašovací cookie underkotatsusubs.cz z prohlížeče). Nastav v Coolify env.'
+    throw new AuthExpired(
+      'Chybí UK_COOKIE (přihlašovací cookie underkotatsusubs.cz z prohlížeče). Nastav v Coolify env.',
+      DOMAIN
     );
   }
 }
@@ -41,7 +44,7 @@ export async function getHtml(url) {
   const res = await fetch(abs, { headers: headers(), redirect: 'follow' });
   const text = await res.text();
   if (!/logged-in|logout|wp-admin|Odhlás/i.test(text)) {
-    throw new Error('underkotatsusubs: cookie neplatí (nejsme přihlášeni). Obnov UK_COOKIE.');
+    throw new AuthExpired('underkotatsusubs: cookie neplatí (nejsme přihlášeni). Obnov UK_COOKIE.', DOMAIN);
   }
   return text;
 }
@@ -59,7 +62,7 @@ export async function getBinary(url, { referer } = {}) {
   if (res.status >= 300 && res.status < 400) {
     await res.arrayBuffer().catch(() => {});
     if (/no-access/i.test(loc)) {
-      throw new Error('underkotatsusubs: no-access (cookie vypršela?). Obnov UK_COOKIE.');
+      throw new AuthExpired('underkotatsusubs: no-access (cookie vypršela?). Obnov UK_COOKIE.', DOMAIN);
     }
     throw new Error('underkotatsusubs: neočekávaný redirect: ' + loc);
   }

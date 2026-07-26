@@ -17,14 +17,32 @@ export const name = 'hannya-subs.blogspot.com';
 
 const MEGA_RE = /mega\.nz\/file\//i;
 
+// GET blogspot článku s retry na přechodný rate-limit (Google 429/503): 2→4→8 s
+async function fetchArticle(articleUrl) {
+  const MAX = 3;
+  for (let tries = 0; ; tries++) {
+    await hostGate(articleUrl);
+    const res = await fetch(articleUrl, {
+      headers: { 'User-Agent': CONFIG.userAgent, 'Accept-Language': 'cs,sk;q=0.9' },
+    });
+    if (res.status === 429 || res.status === 503) {
+      await res.text().catch(() => {});
+      if (tries >= MAX) {
+        throw new Error(`Blog nedostupný: HTTP ${res.status} i po ${MAX} pokusech (rate-limit) — zkusí se příště.`);
+      }
+      const wait = 2000 * Math.pow(2, tries); // 2s, 4s, 8s
+      console.log(`  ⏳ hannya-subs HTTP ${res.status}, čekám ${wait / 1000}s a zkouším znovu (${tries + 1}/${MAX})…`);
+      await new Promise((r) => setTimeout(r, wait));
+      continue;
+    }
+    if (!res.ok) throw new Error('Blog nedostupný: HTTP ' + res.status);
+    return res.text();
+  }
+}
+
 // z blogspot článku udělá mapu {episode: megaUrl}
 async function episodeMap(articleUrl) {
-  await hostGate(articleUrl);
-  const res = await fetch(articleUrl, {
-    headers: { 'User-Agent': CONFIG.userAgent, 'Accept-Language': 'cs,sk;q=0.9' },
-  });
-  if (!res.ok) throw new Error('Blog nedostupný: HTTP ' + res.status);
-  const html = await res.text();
+  const html = await fetchArticle(articleUrl);
   const $ = cheerio.load(html);
 
   const map = {};
