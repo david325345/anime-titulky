@@ -122,6 +122,7 @@ async function toshoJson(qs) {
 }
 
 const BD_RE = /\b(bd|bdrip|blu-?ray)\b/i;
+const DVD_RE = /\b(dvd|dvdrip)\b/i;
 function groupFromTitle(title) {
   const m = (title || '').match(/\[([^\]]+)\]/);
   return m ? m[1].trim() : null;
@@ -220,7 +221,7 @@ function baseNameOf(sub) {
     .replace(/^\d+__/, ''); // odsekni prefix ID z původního jména
 }
 
-async function saveMachine(sub, outputText, releaseTitle, source) {
+async function saveMachine(sub, outputText, releaseTitle, source, kind = 'BD auto') {
   if (!r2Enabled()) throw new Error('R2 není nastaveno — strojovou verzi není kam uložit.');
   const machineId = machineIdFor(sub.sub_id, source);
   const outBuf = Buffer.from(outputText, 'utf8');
@@ -245,8 +246,8 @@ async function saveMachine(sub, outputText, releaseTitle, source) {
     episode: sub.episode ?? null,
     lang: sub.lang ?? null,
     group_name: sub.group_name ?? null, // jako originál (skupina zůstává)
-    release: 'BD auto',                 // release = BD auto → addon ukazuje jen tohle
-    version: releaseTitle,              // název BD ripu / ruční ref → jen pro web (addon version neukazuje)
+    release: kind,                      // 'BD auto' / 'DVD auto' → addon ukazuje tohle
+    version: releaseTitle,              // název ripu / ruční ref → jen pro web (addon version neukazuje)
     filename: outName,
     file_bytes: outBuf.length,
     r2_key,
@@ -257,7 +258,7 @@ async function saveMachine(sub, outputText, releaseTitle, source) {
 }
 
 // společný konec: stáhni CZ z R2 → subsync → ulož strojovou verzi
-async function resyncAndSave(sub, refBuf, refName, releaseTitle, source) {
+async function resyncAndSave(sub, refBuf, refName, releaseTitle, source, kind = 'BD auto') {
   const czRaw = await r2Get(sub.r2_key);
   if (!czRaw || !czRaw.length) {
     return { ok: false, stage: 'cz', error: 'CZ titulek se nepodařilo stáhnout z R2.' };
@@ -274,9 +275,10 @@ async function resyncAndSave(sub, refBuf, refName, releaseTitle, source) {
   if (!sync.ok || !sync.output) {
     return { ok: false, stage: 'subsync', error: sync.message || 'Přečas selhal.', detail: sync };
   }
-  const saved = await saveMachine(sub, sync.output, releaseTitle, source);
+  const saved = await saveMachine(sub, sync.output, releaseTitle, source, kind);
   return {
     ok: true,
+    kind,
     release: releaseTitle,
     episode: sub.episode,
     format: sync.format,
@@ -294,25 +296,38 @@ export async function bdResync(sub, source = 'hiyori') {
   // 1) anidb ID
   const anidb = await resolveAnidbId(sub);
 
-  // 2) BD releasy na Toshu
+  // 2) releasy na Toshu — přednostně BD, jako záloha DVD
   const feed = await toshoJson(`aid=${anidb}`);
   const arr = Array.isArray(feed) ? feed : [];
-  const releases = arr
-    .filter((x) => x.status === 'complete' && BD_RE.test(x.title || ''))
-    .map((x) => ({ id: x.id, title: x.title, group: groupFromTitle(x.title), num_files: x.num_files }));
-  if (!releases.length) return { ok: false, stage: 'tosho', anidb, error: 'Na Toshu není BD release.' };
-
-  // 3) reference = plná dialogová stopa daného dílu
-  const ref = await pickReference(releases, sub.episode);
-  if (!ref) {
-    return { ok: false, stage: 'reference', anidb, bd_releases: releases.length,
-      error: `V BD releasech nenalezena dialogová stopa pro díl ${sub.episode}.` };
+  const complete = arr.filter((x) => x.status === 'complete');
+  const relsOf = (re) =>
+    complete
+      .filter((x) => re.test(x.title || ''))
+      .map((x) => ({ id: x.id, title: x.title, group: groupFromTitle(x.title), num_files: x.num_files }));
+  const bdRels = relsOf(BD_RE);
+  const dvdRels = relsOf(DVD_RE);
+  if (!bdRels.length && !dvdRels.length) {
+    return { ok: false, stage: 'tosho', anidb, error: 'Na Toshu není BD ani DVD release.' };
   }
 
-  // 4) stáhni EN referenci (.xz) → 5+6) přečas + uložení
+  // 3) reference = plná dialogová stopa daného dílu; nejdřív BD, pak DVD
+  let ref = null;
+  let kind = 'BD auto';
+  if (bdRels.length) ref = await pickReference(bdRels, sub.episode);
+  if (!ref && dvdRels.length) {
+    ref = await pickReference(dvdRels, sub.episode);
+    if (ref) kind = 'DVD auto';
+  }
+  if (!ref) {
+    return { ok: false, stage: 'reference', anidb,
+      bd_releases: bdRels.length, dvd_releases: dvdRels.length,
+      error: `V BD ani DVD releasech nenalezena dialogová stopa pro díl ${sub.episode}.` };
+  }
+
+  // 4) stáhni referenci (.xz) → 5+6) přečas + uložení (typ = BD/DVD auto)
   const refXz = await downloadAttachXz(ref.attachId);
-  const r = await resyncAndSave(sub, refXz, 'ref.xz', ref.releaseTitle, source);
-  if (r.ok) { r.anidb = anidb; r.group = ref.group; }
+  const r = await resyncAndSave(sub, refXz, 'ref.xz', ref.releaseTitle, source, kind);
+  if (r.ok) { r.anidb = anidb; r.group = ref.group; r.kind = kind; }
   return r;
 }
 
