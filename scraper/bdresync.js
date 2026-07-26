@@ -208,7 +208,7 @@ async function indexerReleases(sub) {
   return rankReleases(
     tr.map((t) => ({
       at_id: t.at_id,
-      group: t.group_name || '',
+      group: t.group_name || groupFromTitle(t.name) || '', // grupa z názvu torrentu, když ji indexer u dílu nemá
       name: t.name || '',
       seeders: Number(t.seeders) || 0,
       kind: detectKind(t.name, t.video_source),
