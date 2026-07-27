@@ -135,6 +135,17 @@ async function toshoJson(qs) {
 
 const BD_RE = /\b(bd|bdrip|blu-?ray)\b/i;
 const DVD_RE = /\b(dvd|dvdrip)\b/i;
+const WEB_RE = /\b(web-?dl|webrip|web)\b/i;
+
+// Je kandidát JISTÝ BD/DVD rip? Pro BD přečas nechceme WEB referenci (jiné timing).
+// Indexer-first: video_source rozhodne, když je vyplněné; jinak STRIKTNĚ podle názvu
+// (jen jasné BD/Blu-Ray/BDRip/DVD; WEB i nejednoznačné bez markeru ven).
+function isBdOrDvd(name, videoSource) {
+  const vs = (videoSource || '').toLowerCase();
+  if (vs === 'bluray' || vs === 'dvd') return true;   // indexer říká BD/DVD
+  if (vs && WEB_RE.test(vs)) return false;             // indexer říká WEB → ven
+  return BD_RE.test(name || '') || DVD_RE.test(name || ''); // vs prázdné → parser názvu
+}
 function groupFromTitle(title) {
   const m = (title || '').match(/\[([^\]]+)\]/);
   return m ? m[1].trim() : null;
@@ -227,7 +238,9 @@ async function indexerReleases(sub) {
   const r2 = await indexerRequest(path).catch(() => null);
   const tr = (r2 && r2.json && r2.json.tosho_results) || tr1;
   return rankReleases(
-    tr.map((t) => {
+    tr
+      .filter((t) => isBdOrDvd(t.name, t.video_source)) // STRIKTNĚ jen BD/DVD (WEB i nejednoznačné ven)
+      .map((t) => {
       // indexer už vyřešil, který soubor batche je dotazovaný díl → file_index do file_list
       let fileList = t.file_list;
       if (typeof fileList === 'string') { try { fileList = JSON.parse(fileList); } catch { fileList = null; } }
