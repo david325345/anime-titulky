@@ -31,12 +31,13 @@ export function releaseGroup(raw) {
   return uniq.length ? uniq.join(' + ') : String(raw).trim();
 }
 
-// Zobrazovaný release pro addon/Stremio. Strojová (BD auto) verze má release=kind
-// ('🤖 BD'/'🤖 DVD') a Tosho skupinu v `group_name` → ukaž „🤖 BD · <Tosho skupina>".
+// Zobrazovaný release pro addon/Stremio. Strojová (BD auto) verze: release už drží
+// „🤖 BD · <Tosho grupa>" a group_name = PŮVODNÍ CZ grupa → Stremio: „CZ | HNS | 🤖 BD · …".
+// Zpětná kompat pro staré řádky (release jen '🤖 BD', grupa v group_name): doplň grupu.
 export function subRelease(r) {
   if (r && r.kind === 'machine') {
-    const g = r.group_name || releaseGroup(r.version);
-    return g ? `${r.release} · ${g}` : r.release;
+    if (/·/.test(r.release || '')) return r.release; // nový formát (už kompletní)
+    return r.group_name ? `${r.release} · ${r.group_name}` : r.release; // starý řádek
   }
   return releaseGroup(r ? r.release : null);
 }
