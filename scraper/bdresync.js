@@ -393,8 +393,8 @@ async function saveMachine(sub, outputText, releaseTitle, source, kind = '🤖 B
     anime_title: sub.anime_title ?? null,
     episode: sub.episode ?? null,
     lang: sub.lang ?? null,
-    group_name: groupName ?? sub.group_name ?? null, // AUTO: 🤖 grupa BD ripu; RUČNÍ: originál
-    release: kind,                      // '🤖 BD' / '🤖 DVD' → addon ukazuje tohle
+    group_name: sub.group_name ?? null, // PŮVODNÍ CZ grupa (Hns/…) → Stremio ukazuje „CZ | HNS | …"
+    release: groupName ? `${kind} · ${groupName}` : kind, // „🤖 BD · <Tosho grupa>" (grupa BD ripu až za robotem)
     version: releaseTitle,              // název ripu / ruční ref → jen pro web (addon version neukazuje)
     filename: outName,
     file_bytes: outBuf.length,
