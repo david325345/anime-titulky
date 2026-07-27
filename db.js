@@ -31,6 +31,16 @@ export function releaseGroup(raw) {
   return uniq.length ? uniq.join(' + ') : String(raw).trim();
 }
 
+// Zobrazovaný release pro addon/Stremio. Strojová (BD auto) verze má release=kind
+// ('🤖 BD'/'🤖 DVD') a Tosho skupinu v `group_name` → ukaž „🤖 BD · <Tosho skupina>".
+export function subRelease(r) {
+  if (r && r.kind === 'machine') {
+    const g = r.group_name || releaseGroup(r.version);
+    return g ? `${r.release} · ${g}` : r.release;
+  }
+  return releaseGroup(r ? r.release : null);
+}
+
 // akihabara.db — samostatný statický archiv (mrtvý web anime.akihabara.cz).
 // READ-ONLY: jen čteme, žádné zápisy. Když soubor chybí, akiDb = null a
 // všechny akihabara dotazy se přeskočí (služba běží dál jen s hiyori).
@@ -534,7 +544,7 @@ export function allSubs() {
       sub_id: r.sub_id,
       lang: r.lang,
       group: r.group_name,
-      release: releaseGroup(r.release),
+      release: subRelease(r),
       version: r.version,
       source: r.extern_domain || 'hiyori',
       r2_key: r.r2_key, // server z něj udělá gz_url

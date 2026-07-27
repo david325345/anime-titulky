@@ -9,7 +9,7 @@ import {
   overviewCounts, recentSubs, recentRuns, getMeta, getSub, findSubs, subsAvailability,
   listSubs, deleteSub, recentlyAdded, markDownloaded, allSubs, updateSubMeta,
   listAkihabaraAnime, akihabaraAnimeDetail, akihabaraStats, resetSubDownload,
-  machineVersionsFor, getAkiSub, bulkBdTargetsHiyori, bulkBdTargetsAki, releaseGroup,
+  machineVersionsFor, getAkiSub, bulkBdTargetsHiyori, bulkBdTargetsAki, releaseGroup, subRelease,
 } from './db.js';
 import * as hanabi from './scraper/sources/hanabi.js';
 import { saveSubFile } from './scraper/download.js';
@@ -70,7 +70,7 @@ app.get('/api/subs', (req, res) => {
     sub_id: r.sub_id,
     lang: r.lang,
     group: r.group_name,
-    release: releaseGroup(r.release),
+    release: subRelease(r),
     version: r.version,
     episode: r.episode,
     kind: r.kind,
