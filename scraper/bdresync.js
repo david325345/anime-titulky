@@ -227,14 +227,24 @@ async function indexerReleases(sub) {
   const r2 = await indexerRequest(path).catch(() => null);
   const tr = (r2 && r2.json && r2.json.tosho_results) || tr1;
   return rankReleases(
-    tr.map((t) => ({
-      at_id: t.at_id,
-      group: t.group_name || groupFromName(t.name) || '', // grupa z názvu torrentu (přeskočí tech-spec [..]), když ji indexer nemá
-      name: t.name || '',
-      seeders: Number(t.seeders) || 0,
-      kind: detectKind(t.name, t.video_source),
-      season: t.season != null ? Number(t.season) : null, // cílová sezóna z indexeru (S01E.. vs S02E.. ve víc-sezónním batchi)
-    }))
+    tr.map((t) => {
+      // indexer už vyřešil, který soubor batche je dotazovaný díl → file_index do file_list
+      let fileList = t.file_list;
+      if (typeof fileList === 'string') { try { fileList = JSON.parse(fileList); } catch { fileList = null; } }
+      const fileIdx = t.file_index ?? t.fileIdx ?? null;
+      const target = Array.isArray(fileList) && fileIdx != null ? fileList[fileIdx] : null;
+      return {
+        at_id: t.at_id,
+        group: t.group_name || groupFromName(t.name) || '', // grupa z názvu torrentu (přeskočí tech-spec [..]), když ji indexer nemá
+        name: t.name || '',
+        seeders: Number(t.seeders) || 0,
+        kind: detectKind(t.name, t.video_source),
+        season: t.season != null ? Number(t.season) : null, // cílová sezóna z indexeru (fallback výběr souboru)
+        // cílový soubor dílu přímo z indexeru (bez parsování SxxEyy): crc32 = jednoznačný join na Tosho feed
+        targetCrc32: target && target.crc32 ? String(target.crc32).toLowerCase() : null,
+        targetFilename: target && target.filename ? target.filename : null,
+      };
+    })
   );
 }
 
@@ -260,39 +270,50 @@ async function fallbackReleases(sub) {
 
 // Pro daný release (at_id) najdi soubor dílu (přeskoč specialy) a jeho dialogové
 // titulkové stopy (ne Signs/Songs; Full/Dialogue napřed). Vrací {fileName, attIds}.
-async function episodeAttachments(atId, episode, targetSeason = null) {
+async function episodeAttachments(atId, episode, targetSeason = null, targetCrc32 = null, targetFilename = null) {
   let data;
   try { data = await toshoJson(`show=torrent&id=${atId}`); } catch { return null; }
   const files = Array.isArray(data) ? data : data.files || [];
   let file = null;
-  if (files.length === 1 && !isSpecial(files[0].filename)) {
-    file = files[0]; // jednosouborový release = ten díl
-  } else {
-    // sesbírej VŠECHNY řadové soubory s tímhle dílem (isSpecial bere celou cestu vč. složky,
-    // takže OVA/specials složky vypadnou) a rozhodni sezónu:
-    const matches = [];
-    for (const f of files) {
-      if (isSpecial(f.filename)) continue;
-      if (episodeFromName(f.filename) === episode) {
-        matches.push({ f, season: seasonFromName(f.filename) });
+
+  // 1) PŘÍMO z indexeru: indexer už vyřešil, který soubor batche je dotazovaný díl
+  //    (file_index → crc32/filename). crc32 = jednoznačný join, žádné hádání SxxEyy.
+  if (targetCrc32) {
+    file = files.find((f) => String(f.crc32 || '').toLowerCase() === targetCrc32) || null;
+  }
+  if (!file && targetFilename) {
+    file = files.find((f) => f.filename === targetFilename) || null;
+  }
+
+  // 2) FALLBACK (indexer file_index/crc nedodal — starší releasy, ?aid= fallback):
+  //    parsování SxxEyy + cílová sezóna z indexeru, speciály/OVA vynech.
+  if (!file) {
+    if (files.length === 1 && !isSpecial(files[0].filename)) {
+      file = files[0];
+    } else {
+      const matches = [];
+      for (const f of files) {
+        if (isSpecial(f.filename)) continue;
+        if (episodeFromName(f.filename) === episode) matches.push({ f, season: seasonFromName(f.filename) });
       }
-    }
-    // 1) přesná shoda CÍLOVÉ sezóny z indexeru (S01 vs S02 ve víc-sezónním batchi)
-    if (targetSeason != null) {
-      const exact = matches.find((m) => m.season === targetSeason);
-      if (exact) file = exact.f;
-    }
-    // 2) fallback: nejnižší sezóna (absolutní číslování bez SxxEyy / neznámá cílová sezóna)
-    if (!file && matches.length) {
-      matches.sort((a, b) => (a.season ?? 1) - (b.season ?? 1)); // null (absolutní) ber jako S1
-      file = matches[0].f;
+      if (targetSeason != null) {
+        const exact = matches.find((m) => m.season === targetSeason);
+        if (exact) file = exact.f;
+      }
+      if (!file && matches.length) {
+        matches.sort((a, b) => (a.season ?? 1) - (b.season ?? 1));
+        file = matches[0].f;
+      }
     }
   }
   if (!file) return null;
+
+  // titulkové stopy: type=subtitle, ne Signs/Songs, ne PGS (bitmapové → alass neumí), Full/Dialogue napřed
   const attIds = (file.attachments || [])
     .filter((a) => a.type === 'subtitle')
     .map((a) => ({ id: a.id, nm: (a.info?.name || '').toLowerCase() }))
-    .filter((x) => !/sign|song/.test(x.nm)) // Signs/Songs vynech
+    .filter((x) => !/sign|song/.test(x.nm))         // Signs/Songs vynech
+    .filter((x) => !/pgs/.test(x.nm))               // PGS = obrazové, subsync nezvládne → přeskoč rovnou
     .sort((x, y) => (/(full|dialog)/.test(y.nm) ? 1 : 0) - (/(full|dialog)/.test(x.nm) ? 1 : 0))
     .map((x) => x.id);
   return { fileName: file.filename, attIds };
@@ -425,7 +446,7 @@ export async function bdResync(sub, source = 'hiyori') {
   let lastDetail = null;
   for (const rel of releases) {
     if (tried >= 8) break; // strop na počet pokusů (Tosho + čas)
-    const ea = await episodeAttachments(rel.at_id, sub.episode, rel.season);
+    const ea = await episodeAttachments(rel.at_id, sub.episode, rel.season, rel.targetCrc32, rel.targetFilename);
     if (!ea || !ea.attIds.length) continue;
     for (const attId of ea.attIds) {
       if (tried >= 8) break;
