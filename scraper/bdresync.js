@@ -14,7 +14,7 @@ import https from 'node:https';
 import zlib from 'node:zlib';
 import { CONFIG } from '../config.js';
 import { r2Enabled, r2Put, r2Get, r2PublicUrl } from '../r2.js';
-import { saveMachineSub, machineIdFor } from '../db.js';
+import { saveMachineSub, machineIdFor, getBdPref, setBdPref } from '../db.js';
 
 // ── Indexer (self-signed cert → jen na tenhle host vypneme verifikaci) ──────
 const insecureAgent = new https.Agent({ rejectUnauthorized: false });
@@ -242,10 +242,17 @@ async function indexerReleases(sub) {
   await new Promise((r) => setTimeout(r, 3000)); // seedy se načtou líně po 1. dotazu
   const r2 = await indexerRequest(path).catch(() => null);
   const tr = (r2 && r2.json && r2.json.tosho_results) || tr1;
+  // filtry: jen BD/DVD, jen cílová sezóna
+  let cand = tr
+    .filter((t) => isBdOrDvd(t.name, t.video_source)) // STRIKTNĚ jen BD/DVD (WEB i nejednoznačné ven)
+    .filter((t) => targetSeason == null || t.season == null || Number(t.season) === targetSeason); // jen CÍLOVÁ sezóna
+  // DOSAŽITELNOST: když existuje release s >0 seedy, zahoď mrtvé (0-seed) — jinak
+  // by strojovka sedla na rip, který si ve Stremiu nikdo nestáhne. Když jsou VŠECHNY
+  // 0-seed, nech je (lepší nějaký než žádný).
+  const anySeeded = cand.some((t) => (Number(t.seeders) || 0) > 0);
+  if (anySeeded) cand = cand.filter((t) => (Number(t.seeders) || 0) > 0);
   return rankReleases(
-    tr
-      .filter((t) => isBdOrDvd(t.name, t.video_source)) // STRIKTNĚ jen BD/DVD (WEB i nejednoznačné ven)
-      .filter((t) => targetSeason == null || t.season == null || Number(t.season) === targetSeason) // jen CÍLOVÁ sezóna (jiná sezóna ven)
+    cand
       .map((t) => {
       // indexer už vyřešil, který soubor batche je dotazovaný díl → file_index do file_list
       let fileList = t.file_list;
@@ -387,7 +394,13 @@ async function saveMachine(sub, outputText, releaseTitle, source, kind = '🤖 B
     : sub.mal_id
     ? `mal/${sub.mal_id}`
     : `x/${sub.sub_id}`;
-  const outName = `${machineId}__${baseNameOf(sub)}`;
+  // jméno strojovky = podle TOSHO REFERENCE (releaseTitle), ne zděděné z původního
+  // CZ titulku (ten nese název webového ripu, na který CZ sedělo → mátlo by).
+  const czExt = (baseNameOf(sub).match(/\.(ass|srt|ssa|sub|vtt)$/i) || ['.ass'])[0];
+  const refBase = releaseTitle
+    ? String(releaseTitle).split(/[\\/]/).pop().replace(/\.[^.]+$/, '').trim()
+    : '';
+  const outName = `${machineId}__${refBase || baseNameOf(sub).replace(/\.[^.]+$/, '')}${czExt}`;
   const r2_key = `machine/${animeSeg}/${epKey}/${outName}.gz`;
 
   await r2Put(r2_key, gz, 'application/gzip');
@@ -456,6 +469,17 @@ export async function bdResync(sub, source = 'hiyori') {
     return { ok: false, stage: 'reference', via, error: 'Na Toshu (ani přes indexer) není BD/DVD release.' };
   }
 
+  // STICKY: preferovaný release anime (z prvního úspěšného přečasu) zkus jako první,
+  // ať jsou všechny díly proti STEJNÉMU ripu (i napříč časem / u jednoho dílu).
+  const prefAtId = sub.anilist_id ? (getBdPref(sub.anilist_id)?.at_id ?? null) : null;
+  const prefPresent = prefAtId != null && releases.some((r) => r.at_id === prefAtId);
+  if (prefPresent) {
+    releases = [
+      ...releases.filter((r) => r.at_id === prefAtId),
+      ...releases.filter((r) => r.at_id !== prefAtId),
+    ];
+  }
+
   const cz = await loadCz(sub);
   if (!cz) return { ok: false, stage: 'cz', via, error: 'CZ titulek se nepodařilo stáhnout z R2.' };
 
@@ -475,6 +499,9 @@ export async function bdResync(sub, source = 'hiyori') {
       const sync = await callSubsync(refXz, 'ref.xz', cz.czBuf, cz.czName);
       if (sync.ok && sync.output) {
         const saved = await saveMachine(sub, sync.output, ea.fileName, source, rel.kind, rel.group || null);
+        // ulož preferovaný release anime: při prvním úspěchu, nebo když starý pref
+        // zmizel (mrtvý/0-seed) → obnov na živý. Jednorázový fallback pref nemění.
+        if (sub.anilist_id && (prefAtId == null || !prefPresent)) setBdPref(sub.anilist_id, rel.at_id);
         return {
           ok: true, via, kind: rel.kind, release: ea.fileName, group: rel.group,
           seeders: rel.seeders, episode: sub.episode, format: sync.format, elapsed_ms: sync.elapsed_ms,
