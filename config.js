@@ -43,6 +43,17 @@ export const CONFIG = {
   // min. rozestup (ms) mezi requesty na TÝŽ web (per-doména brzda proti banu)
   perHostDelayMs: Number(process.env.PER_HOST_DELAY_MS || 4000),
 
+  // per-web override rozestupu pro přísnější weby (Google/Blogspot rate-limituje víc).
+  // Klíč = doména bez www. Env PER_HOST_DELAY_OVERRIDES="host=ms,host2=ms2" přepíše/doplní.
+  perHostDelayOverrides: (() => {
+    const map = { 'hannya-subs.blogspot.com': 10000, 'blogspot.com': 10000 };
+    for (const pair of String(process.env.PER_HOST_DELAY_OVERRIDES || '').split(',')) {
+      const [h, ms] = pair.split('=').map((x) => (x || '').trim());
+      if (h && ms && !Number.isNaN(Number(ms))) map[h.replace(/^www\./, '')] = Number(ms);
+    }
+    return map;
+  })(),
+
   // pauza mezi requesty (ms) — základ; skutečná pauza je náhodná v rozsahu min–max
   requestDelayMs: Number(process.env.REQUEST_DELAY_MS || 2000),
   delayMinMs: Number(process.env.DELAY_MIN_MS || 0), // 0 = odvodit z requestDelayMs
