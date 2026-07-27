@@ -155,7 +155,7 @@ function groupFromName(name) {
 
 // číslo dílu z názvu souboru/releasu (opatrně — radši null než špatně)
 // special/OVA/S00/NCED… = NENÍ řadový díl sezóny → při párování řadového dílu vynech.
-const SPECIAL_RE = /\bS00\b|\bspecials?\b|\bOVA\b|\bOAD\b|\bOAV\b|\bNC(ED|OP)\b|picture drama|creditless|\bmenus?\b/i;
+const SPECIAL_RE = /\bS00\b|\bspecials?\b|\bOVAs?\b|\bOADs?\b|\bOAVs?\b|\bONAs?\b|\bNC(ED|OP)\b|picture drama|creditless|\bmenus?\b/i;
 const isSpecial = (name) => SPECIAL_RE.test(name || '');
 
 function episodeFromName(name) {
@@ -173,6 +173,14 @@ function episodeFromName(name) {
     if (m) return Number(m[1]);
   }
   return null;
+}
+
+// sezóna ze SxxEyy (null = absolutní/nezjištěno). Pro výběr souboru ve víc-sezónním
+// batchi: z víc shod téhož dílu preferuj nejnižší sezónu (S01 před S02), ať přečas
+// řadového dílu nesáhne po pozdější sezóně/OVA se stejným číslem dílu.
+function seasonFromName(name) {
+  const m = (name || '').match(/\bS(\d{1,2})E\d{1,3}\b/i);
+  return m ? Number(m[1]) : null;
 }
 
 // BD/DVD rozlišení kandidáta (název + video_source z indexeru). Default BD —
@@ -225,6 +233,7 @@ async function indexerReleases(sub) {
       name: t.name || '',
       seeders: Number(t.seeders) || 0,
       kind: detectKind(t.name, t.video_source),
+      season: t.season != null ? Number(t.season) : null, // cílová sezóna z indexeru (S01E.. vs S02E.. ve víc-sezónním batchi)
     }))
   );
 }
@@ -251,7 +260,7 @@ async function fallbackReleases(sub) {
 
 // Pro daný release (at_id) najdi soubor dílu (přeskoč specialy) a jeho dialogové
 // titulkové stopy (ne Signs/Songs; Full/Dialogue napřed). Vrací {fileName, attIds}.
-async function episodeAttachments(atId, episode) {
+async function episodeAttachments(atId, episode, targetSeason = null) {
   let data;
   try { data = await toshoJson(`show=torrent&id=${atId}`); } catch { return null; }
   const files = Array.isArray(data) ? data : data.files || [];
@@ -259,9 +268,24 @@ async function episodeAttachments(atId, episode) {
   if (files.length === 1 && !isSpecial(files[0].filename)) {
     file = files[0]; // jednosouborový release = ten díl
   } else {
+    // sesbírej VŠECHNY řadové soubory s tímhle dílem (isSpecial bere celou cestu vč. složky,
+    // takže OVA/specials složky vypadnou) a rozhodni sezónu:
+    const matches = [];
     for (const f of files) {
       if (isSpecial(f.filename)) continue;
-      if (episodeFromName(f.filename) === episode) { file = f; break; }
+      if (episodeFromName(f.filename) === episode) {
+        matches.push({ f, season: seasonFromName(f.filename) });
+      }
+    }
+    // 1) přesná shoda CÍLOVÉ sezóny z indexeru (S01 vs S02 ve víc-sezónním batchi)
+    if (targetSeason != null) {
+      const exact = matches.find((m) => m.season === targetSeason);
+      if (exact) file = exact.f;
+    }
+    // 2) fallback: nejnižší sezóna (absolutní číslování bez SxxEyy / neznámá cílová sezóna)
+    if (!file && matches.length) {
+      matches.sort((a, b) => (a.season ?? 1) - (b.season ?? 1)); // null (absolutní) ber jako S1
+      file = matches[0].f;
     }
   }
   if (!file) return null;
@@ -401,7 +425,7 @@ export async function bdResync(sub, source = 'hiyori') {
   let lastDetail = null;
   for (const rel of releases) {
     if (tried >= 8) break; // strop na počet pokusů (Tosho + čas)
-    const ea = await episodeAttachments(rel.at_id, sub.episode);
+    const ea = await episodeAttachments(rel.at_id, sub.episode, rel.season);
     if (!ea || !ea.attIds.length) continue;
     for (const attId of ea.attIds) {
       if (tried >= 8) break;
