@@ -144,6 +144,26 @@ db.exec('CREATE INDEX IF NOT EXISTS idx_subs_machine_of ON subs(machine_of)');
 // aby vazba machine_of byla jednoznačná. NULL u legacy řádků bereme jako hiyori.
 ensureColumn('subs', 'machine_source', 'TEXT');
 
+// Preferovaný BD/DVD release na anime (sticky): jakmile se jeden díl přečasuje
+// úspěšně proti nějakému Tosho releasu, drží se to samé at_id i pro další díly
+// (i napříč časem, i u přečasu jednoho dílu). Batch má na 99 % všechny díly.
+db.exec(`CREATE TABLE IF NOT EXISTS bd_pref (
+  anilist_id INTEGER PRIMARY KEY,
+  at_id      INTEGER NOT NULL,
+  updated_at TEXT DEFAULT (datetime('now'))
+)`);
+export function getBdPref(anilistId) {
+  if (!anilistId) return null;
+  return db.prepare('SELECT anilist_id, at_id FROM bd_pref WHERE anilist_id=?').get(anilistId) || null;
+}
+export function setBdPref(anilistId, atId) {
+  if (!anilistId || !atId) return;
+  db.prepare(
+    `INSERT INTO bd_pref (anilist_id, at_id, updated_at) VALUES (?, ?, datetime('now'))
+     ON CONFLICT(anilist_id) DO UPDATE SET at_id=excluded.at_id, updated_at=excluded.updated_at`
+  ).run(anilistId, atId);
+}
+
 // --- meta helpers ---
 const _getMeta = db.prepare('SELECT value FROM meta WHERE key=?');
 const _setMeta = db.prepare(
