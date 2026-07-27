@@ -230,6 +230,11 @@ async function indexerReleases(sub) {
     ? `mal=${sub.mal_id}`
     : null;
   if (!idParam) return [];
+  // cílová sezóna z indexeru (přesné mapování anilist+díl → sezóna) — ať do výběru nepustíme
+  // release z JINÉ sezóny (Solo Leveling S1 dotaz vracel i Season 2 batch → S02E01 místo S01E01).
+  let targetSeason = null;
+  const rid = await indexerRequest(`/api/resolve-ids?${idParam}&episode=${sub.episode}`).catch(() => null);
+  if (rid && rid.json && rid.json.season != null) targetSeason = Number(rid.json.season);
   const path = `/search?${idParam}&episode=${sub.episode}`;
   const r1 = await indexerRequest(path).catch(() => null);
   const tr1 = (r1 && r1.json && r1.json.tosho_results) || [];
@@ -240,6 +245,7 @@ async function indexerReleases(sub) {
   return rankReleases(
     tr
       .filter((t) => isBdOrDvd(t.name, t.video_source)) // STRIKTNĚ jen BD/DVD (WEB i nejednoznačné ven)
+      .filter((t) => targetSeason == null || t.season == null || Number(t.season) === targetSeason) // jen CÍLOVÁ sezóna (jiná sezóna ven)
       .map((t) => {
       // indexer už vyřešil, který soubor batche je dotazovaný díl → file_index do file_list
       let fileList = t.file_list;
