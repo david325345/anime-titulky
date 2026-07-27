@@ -157,9 +157,12 @@ export async function getHtml(pathOrUrl, { referer } = {}) {
     captureSetCookies(res);
     const text = await res.text();
     if (text.includes('/account/logout')) return text; // jsme přihlášeni
-    if (loginTries === 0) {
+    // odhlášená stránka → zaseknutá/neplatná session: vyčistit stav a přihlásit znovu (víc pokusů)
+    if (loginTries < 3) {
       loginTries++;
-      await login(); // spadli jsme na login stránku → přihlásit a zkusit znovu
+      cookies.clear();                 // zahoď zaseknutou cookie, ať login začne načisto
+      await sleep(1000 * loginTries);  // 1s, 2s, 3s
+      await login();
       continue;
     }
     throw new Error('Stránka nedostupná / nelze se přihlásit: ' + url);
@@ -185,12 +188,12 @@ export async function getBinary(pathOrUrl, { referer } = {}) {
     // redirect nebo HTML = nejspíš vypadlá session
     if (res.status >= 300 && res.status < 400) {
       await res.arrayBuffer().catch(() => {});
-      if (loginTries === 0) { loginTries++; await login(); continue; }
+      if (loginTries < 3) { loginTries++; cookies.clear(); await sleep(1000 * loginTries); await login(); continue; }
       throw new Error('Redirect při stahování (odhlášeno?): ' + url);
     }
     if (ct.includes('text/html')) {
       await res.arrayBuffer().catch(() => {});
-      if (loginTries === 0) { loginTries++; await login(); continue; }
+      if (loginTries < 3) { loginTries++; cookies.clear(); await sleep(1000 * loginTries); await login(); continue; }
       throw new Error('Dostal jsem HTML místo souboru: ' + url);
     }
 
