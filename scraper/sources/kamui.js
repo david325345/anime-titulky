@@ -55,7 +55,24 @@ export async function download(sub) {
   const html = await getHtml(sub.url);
   const $ = cheerio.load(html);
   const map = episodeMap($);
-  const dlUrl = map[sub.episode];
+  let dlUrl = map[sub.episode];
+
+  // FILM / jednodílné: tlačítko nemá „N. Díl" (třeba „Celovečerní film") → mapa je
+  // prázdná. Když na stránce není ŽÁDNÝ číslovaný díl a je jediný /download/ odkaz,
+  // ber ho jako ten titulek. U seriálu (mapa má díly) se fallback nespustí → chybu
+  // pro nevyšlý díl korektně nahlásí dál.
+  if (!dlUrl && Object.keys(map).length === 0) {
+    const links = [
+      ...new Set(
+        $('a[href*="/download/"]')
+          .map((_, a) => ($(a).attr('href') || '').trim())
+          .get()
+          .filter((h) => /\/download\/\d+\/?/.test(h))
+      ),
+    ];
+    if (links.length === 1) dlUrl = links[0];
+  }
+
   if (!dlUrl) {
     throw new Error(
       `kamui-subs: na stránce není tlačítko pro díl ${sub.episode} (možná ještě nevyšel).`
