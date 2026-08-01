@@ -142,7 +142,8 @@ const WEB_RE = /\b(web-?dl|webrip|web)\b/i;
 // (jen jasné BD/Blu-Ray/BDRip/DVD; WEB i nejednoznačné bez markeru ven).
 function isBdOrDvd(name, videoSource) {
   const vs = (videoSource || '').toLowerCase();
-  if (vs === 'bluray' || vs === 'dvd') return true;   // indexer říká BD/DVD
+  // indexer-first: reálné hodnoty dumpu jsou „BD", „BD Remux", „BDRip", „DVD", „WEB", „WEB-DL"
+  if (BD_RE.test(vs) || DVD_RE.test(vs)) return true;  // indexer říká BD/DVD (i „BD Remux")
   if (vs && WEB_RE.test(vs)) return false;             // indexer říká WEB → ven
   return BD_RE.test(name || '') || DVD_RE.test(name || ''); // vs prázdné → parser názvu
 }
