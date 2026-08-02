@@ -114,12 +114,12 @@ button.del {
 }
 button.del:hover { background: rgba(255,123,114,.14); border-color: #ff7b72; }
 button.del:disabled { opacity: .4; cursor: default; }
-button.del-r2 {
+button.del-r2, button.del-db {
   background: transparent; border: 1px solid #a03434; color: #ff5c5c;
   border-radius: 6px; padding: 2px 8px; cursor: pointer; font-size: 13px; line-height: 1; margin-left: 4px;
 }
-button.del-r2:hover { background: rgba(255,60,60,.18); border-color: #ff5c5c; }
-button.del-r2:disabled { opacity: .4; cursor: default; }
+button.del-r2:hover, button.del-db:hover { background: rgba(255,60,60,.18); border-color: #ff5c5c; }
+button.del-r2:disabled, button.del-db:disabled { opacity: .4; cursor: default; }
 button.reset-sub {
   background: transparent; border: 1px solid #4a6c9c; color: #8fc4ff;
   border-radius: 6px; padding: 2px 8px; cursor: pointer; font-size: 13px; line-height: 1; margin-left: 4px;
