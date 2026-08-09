@@ -93,7 +93,24 @@ export async function ingestAnime(hiyoriId, card = {}, { onlyEpisodes = null, ma
 // ke kterým se pak ručně nahraje soubor přes 📤. Žádný odkaz — univerzální.
 // Fake sub_id z rozsahu 900000000+ (deterministicky: nekoliduje s hiyori
 // ani s hns variantami 700M; stejný díl 2× nevytvoří duplicitu).
+// PRVNÍ sada dílu = staré pásmo (MANUAL_ID_BASE + hiyoriId*1000 + ep).
+// DALŠÍ sady téhož dílu (jiná skupina/release) = variantní pásmo (>=1e9,
+// deterministický FNV hash z hiyori|ep|group|release|lang) → leží vedle sebe.
 const MANUAL_ID_BASE = 900000000;
+const MANUAL_VARIANT_BASE = 1000000000; // 1e9 — nad manual pásmem (900M–999.999M) i vším ostatním (hiyori/hns 700M/archiv <1e9)
+
+function manualNorm(s) { return String(s || '').trim().toLowerCase(); }
+function manualFnv1a(str) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+  return h >>> 0;
+}
+// ID pro variantní sadu — deterministické z (hiyori|ep|group|release|lang).
+// Stejná sada 2× → stejné ID → INSERT OR IGNORE přeskočí. Jiný release → jiné ID → založí vedle.
+function manualVariantId(hiyoriId, ep, group, release, lang) {
+  const key = [hiyoriId, ep, manualNorm(group), manualNorm(release), manualNorm(lang)].join('|');
+  return MANUAL_VARIANT_BASE + (manualFnv1a(key) % 8000000000);
+}
 
 export async function addManualEpisodes(hiyoriId, { epFrom, epTo, lang, group, release }) {
   const detail = await getDetail(hiyoriId);
@@ -112,7 +129,20 @@ export async function addManualEpisodes(hiyoriId, { epFrom, epTo, lang, group, r
   let added = 0;
   const episodes = [];
   for (let ep = from; ep <= to; ep++) {
-    const sub_id = MANUAL_ID_BASE + hiyoriId * 1000 + ep;
+    // Rozhodnutí ID pro tuto sadu (skupina/release/jazyk) na tomto dílu:
+    //  - Když staré pásmo (oldId) NEEXISTUJE → použij ho (1. sada dílu, zpětná kompat).
+    //  - Když oldId existuje a jeho záznam odpovídá TÉTO sadě (stejná group+release+lang)
+    //    → je to táž sada, cíl je oldId (INSERT OR IGNORE ji přeskočí, žádná duplicita).
+    //  - Jinak (oldId patří JINÉ sadě) → variantní ID (deterministické z group/release/lang).
+    const oldId = MANUAL_ID_BASE + hiyoriId * 1000 + ep;
+    const existing = getSub(oldId);
+    const sameAsOld = existing
+      && manualNorm(existing.group_name) === manualNorm(group)
+      && manualNorm(existing.release) === manualNorm(release)
+      && manualNorm(existing.lang) === manualNorm(lang);
+    const sub_id = (!existing || sameAsOld)
+      ? oldId
+      : manualVariantId(hiyoriId, ep, group, release, lang);
     const changed = insertSub({
       sub_id,
       hiyori_id: hiyoriId,
