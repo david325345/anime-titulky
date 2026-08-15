@@ -367,7 +367,9 @@ export function listSubs({ limit = 100, offset = 0, q = null } = {}) {
   const rows = db
     .prepare(
       `SELECT * FROM subs ${where}
-       ORDER BY first_seen DESC, anime_title, episode ASC, sub_id DESC LIMIT @limit OFFSET @offset`
+       ORDER BY MAX(first_seen) OVER (PARTITION BY anime_title) DESC,
+                anime_title, episode ASC, lang, group_name, sub_id
+       LIMIT @limit OFFSET @offset`
     )
     .all({ limit, offset, like });
   const total = db
