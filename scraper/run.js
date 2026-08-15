@@ -49,6 +49,11 @@ export async function ingestAnime(hiyoriId, card = {}, { onlyEpisodes = null, ma
 
   let added = 0;
   let blocked = 0;
+  // Hromadné přidání (bez filtru = celé anime z hiyori linku) → jeden společný
+  // čas, aby všechny díly patřily do JEDNÉ dávky a v přehledu byly pohromadě
+  // popořadě. Autofetch (useFilter, typicky 1 nový díl) → čas per řádek, ať se
+  // nový díl v přehledu ukáže sám nahoře.
+  const batchSeen = new Date().toISOString();
   for (const row of rows) {
     if (isBlockedRow(row)) { blocked++; continue; }
     const changed = insertSub({
@@ -67,7 +72,7 @@ export async function ingestAnime(hiyoriId, card = {}, { onlyEpisodes = null, ma
       url: row.url,
       extern_domain: row.extern_domain,
       added_date: row.added_date || card.addedDate,
-      first_seen: new Date().toISOString(),
+      first_seen: useFilter ? new Date().toISOString() : batchSeen,
       manual_add: manualAdd ? 1 : 0,
       status:
         row.kind === 'direct'
