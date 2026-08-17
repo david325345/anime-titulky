@@ -87,6 +87,8 @@ app.get('/api/subs', (req, res) => {
 // GET /api/subs/available?anilist=154587&mal=52991[&episode=5]
 // Rychlá odpověď, zda pro anime/díl máme titulky na R2 (bez plných dat).
 app.get('/api/subs/available', (req, res) => {
+  // CORS: povol čtení z hiyori.cz extension (jinak stejný veřejný read-only endpoint).
+  res.setHeader('Access-Control-Allow-Origin', 'https://hiyori.cz');
   const anilist = Number(req.query.anilist) || null;
   const mal = Number(req.query.mal) || null;
   const episode = req.query.episode != null && req.query.episode !== ''
