@@ -10,6 +10,7 @@ import {
   listSubs, deleteSub, recentlyAdded, markDownloaded, allSubs, updateSubMeta,
   listAkihabaraAnime, akihabaraAnimeDetail, akihabaraStats, resetSubDownload,
   machineVersionsFor, getAkiSub, bulkBdTargetsHiyori, bulkBdTargetsAki, releaseGroup, subRelease,
+  insertRequest, listRequests, getRequest, setRequestStatus, requestStatusForAnilist,
 } from './db.js';
 import * as hanabi from './scraper/sources/hanabi.js';
 import { saveSubFile } from './scraper/download.js';
@@ -107,8 +108,50 @@ app.get('/api/subs/available', (req, res) => {
     subs_total: a.subs_total,         // kolik titulků celkem (vč. variant)
     langs: a.langs,                   // souhrn jazyků
     episodes: a.episodes,             // [{episode, subs:[{lang,group,release}]}]
+    request_status: requestStatusForAnilist(anilist), // 'pending'|'done'|null — pro tlačítko v extension
   });
 });
+
+// --- Požadavky na přidání anime z hiyori extension (veřejné, PŘED basicAuth) ---
+
+// CORS preflight pro POST /api/request-anime
+app.options('/api/request-anime', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', 'https://hiyori.cz');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.sendStatus(204);
+});
+
+// Jednoduchý paměťový rate-limit na IP (20 requestů / hodinu). Resetuje se při
+// restartu — pro anti-spam veřejného endpointu bohatě stačí, žádná další tabulka.
+const reqAnimeHits = new Map(); // ip -> [timestamp, ...]
+function rateOk(ip, maxPerHour = 20) {
+  const now = Date.now();
+  const hourAgo = now - 3600000;
+  const hits = (reqAnimeHits.get(ip) || []).filter((t) => t > hourAgo);
+  if (hits.length >= maxPerHour) { reqAnimeHits.set(ip, hits); return false; }
+  hits.push(now);
+  reqAnimeHits.set(ip, hits);
+  return true;
+}
+
+// POST /api/request-anime — extension pošle hiyori_id (+ volitelně anilist_id, title).
+app.post('/api/request-anime', express.json(), (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', 'https://hiyori.cz');
+  const ip = String(req.headers['x-forwarded-for'] || req.ip || '').split(',')[0].trim();
+  if (!rateOk(ip)) {
+    return res.status(429).json({ error: 'Příliš mnoho požadavků, zkus to za chvíli.' });
+  }
+  const hiyoriId = Number(req.body?.hiyori_id) || null;
+  if (!hiyoriId || hiyoriId <= 0) {
+    return res.status(400).json({ error: 'Chybí platné hiyori_id.' });
+  }
+  const anilistId = Number(req.body?.anilist_id) || null;
+  const title = req.body?.title ? String(req.body.title).slice(0, 300) : null;
+  const r = insertRequest({ hiyori_id: hiyoriId, anilist_id: anilistId, title, ip });
+  res.json(r); // { status: 'ok' } nebo { status: 'already_requested' }
+});
+
 
 // GET /api/recent[?days=N] — dnes přidané stažené titulky (na R2), seskupené.
 // Bez days = dnešní den od půlnoci. Veřejné (pro addon).
@@ -577,6 +620,42 @@ app.get('/api/add-anime', async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: 'Nepodařilo se načíst anime: ' + e.message });
   }
+});
+
+// --- Požadavky na přidání anime — admin (za basicAuth, jen user1) ---
+
+// GET /api/requests?status=pending — seznam požadavků pro dashboard.
+app.get('/api/requests', (req, res) => {
+  const status = String(req.query.status || 'pending');
+  res.json({ requests: listRequests(status) });
+});
+
+// POST /api/requests/:id/approve — spustí přidání anime (všechny díly) a označí done.
+app.post('/api/requests/:id/approve', requireUser1, async (req, res) => {
+  const reqRow = getRequest(req.params.id);
+  if (!reqRow) return res.status(404).json({ error: 'Požadavek nenalezen.' });
+  try {
+    const r = await ingestAnime(reqRow.hiyori_id, {}, { manualAdd: true });
+    setRequestStatus(reqRow.id, 'done');
+    res.json({
+      ok: true,
+      hiyori_id: reqRow.hiyori_id,
+      title: (r.title || '').replace(/\s*-\s*Hiyori$/i, ''),
+      anilist_id: r.anilistId,
+      found: r.found,
+      added: r.added,
+      blocked: r.blocked,
+    });
+  } catch (e) {
+    res.status(500).json({ error: 'Nepodařilo se přidat anime: ' + e.message });
+  }
+});
+
+// POST /api/requests/:id/reject — zamítne požadavek.
+app.post('/api/requests/:id/reject', requireUser1, (req, res) => {
+  const n = setRequestStatus(req.params.id, 'rejected');
+  if (!n) return res.status(404).json({ error: 'Požadavek nenalezen.' });
+  res.json({ ok: true });
 });
 
 // ruční vložení hanabi ZIP odkazu → server stáhne z CDN, rozbalí .ass, na R2

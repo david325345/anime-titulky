@@ -152,6 +152,57 @@ db.exec(`CREATE TABLE IF NOT EXISTS bd_pref (
   at_id      INTEGER NOT NULL,
   updated_at TEXT DEFAULT (datetime('now'))
 )`);
+
+// Požadavky na přidání anime z hiyori extension (POST /api/request-anime).
+db.exec(`CREATE TABLE IF NOT EXISTS requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  hiyori_id INTEGER NOT NULL,
+  anilist_id INTEGER,
+  title TEXT,
+  status TEXT DEFAULT 'pending',
+  requested_at TEXT DEFAULT (datetime('now')),
+  ip TEXT
+)`);
+db.exec('CREATE INDEX IF NOT EXISTS idx_requests_status ON requests(status)');
+db.exec('CREATE INDEX IF NOT EXISTS idx_requests_hiyori ON requests(hiyori_id)');
+
+// Vloží požadavek. Vrací { status: 'ok' } nebo { status: 'already_requested' }
+// když už existuje pending/done pro stejné hiyori_id (rejected povolí nový).
+export function insertRequest({ hiyori_id, anilist_id = null, title = null, ip = null }) {
+  const existing = db
+    .prepare("SELECT status FROM requests WHERE hiyori_id=? AND status IN ('pending','done') LIMIT 1")
+    .get(hiyori_id);
+  if (existing) return { status: 'already_requested', prev: existing.status };
+  db.prepare('INSERT INTO requests (hiyori_id, anilist_id, title, ip) VALUES (?,?,?,?)')
+    .run(hiyori_id, anilist_id, title, ip);
+  return { status: 'ok' };
+}
+
+// Seznam požadavků daného stavu (pro dashboard).
+export function listRequests(status = 'pending') {
+  return db
+    .prepare('SELECT * FROM requests WHERE status=? ORDER BY requested_at DESC')
+    .all(status);
+}
+
+export function getRequest(id) {
+  return db.prepare('SELECT * FROM requests WHERE id=?').get(Number(id)) || null;
+}
+
+export function setRequestStatus(id, status) {
+  return db.prepare('UPDATE requests SET status=? WHERE id=?').run(status, Number(id)).changes;
+}
+
+// Stav požadavku pro dané anilist_id (pro /api/subs/available → extension).
+// Vrací 'pending' | 'done' | null (rejected se ignoruje = jako by nebyl).
+export function requestStatusForAnilist(anilistId) {
+  if (!anilistId) return null;
+  const r = db
+    .prepare("SELECT status FROM requests WHERE anilist_id=? AND status IN ('pending','done') ORDER BY CASE status WHEN 'done' THEN 0 ELSE 1 END LIMIT 1")
+    .get(Number(anilistId));
+  return r ? r.status : null;
+}
+
 export function getBdPref(anilistId) {
   if (!anilistId) return null;
   return db.prepare('SELECT anilist_id, at_id FROM bd_pref WHERE anilist_id=?').get(anilistId) || null;
