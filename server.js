@@ -86,10 +86,19 @@ app.get('/api/subs', (req, res) => {
 });
 
 // GET /api/subs/available?anilist=154587&mal=52991[&episode=5]
+// Povolené originy pro veřejné read/request endpointy (extension na těchto webech).
+const CORS_ALLOWED_ORIGINS = ['https://hiyori.cz', 'https://myanimelist.net', 'https://anilist.co'];
+function applyCors(req, res) {
+  const origin = req.headers.origin;
+  if (CORS_ALLOWED_ORIGINS.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+  }
+}
+
 // Rychlá odpověď, zda pro anime/díl máme titulky na R2 (bez plných dat).
 app.get('/api/subs/available', (req, res) => {
-  // CORS: povol čtení z hiyori.cz extension (jinak stejný veřejný read-only endpoint).
-  res.setHeader('Access-Control-Allow-Origin', 'https://hiyori.cz');
+  applyCors(req, res); // povol čtení z whitelistovaných extension originů
   const anilist = Number(req.query.anilist) || null;
   const mal = Number(req.query.mal) || null;
   const episode = req.query.episode != null && req.query.episode !== ''
@@ -116,7 +125,7 @@ app.get('/api/subs/available', (req, res) => {
 
 // CORS preflight pro POST /api/request-anime
 app.options('/api/request-anime', (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', 'https://hiyori.cz');
+  applyCors(req, res);
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   res.sendStatus(204);
@@ -137,7 +146,7 @@ function rateOk(ip, maxPerHour = 20) {
 
 // POST /api/request-anime — extension pošle hiyori_id (+ volitelně anilist_id, title).
 app.post('/api/request-anime', express.json(), (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', 'https://hiyori.cz');
+  applyCors(req, res);
   const ip = String(req.headers['x-forwarded-for'] || req.ip || '').split(',')[0].trim();
   if (!rateOk(ip)) {
     return res.status(429).json({ error: 'Příliš mnoho požadavků, zkus to za chvíli.' });
