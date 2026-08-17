@@ -207,3 +207,16 @@ button.bd-resync { cursor: pointer; }
 .aki-bulk-bar { margin: 0 0 8px; }
 .aki-bulk-bd { font-size: 12px; padding: 4px 10px; cursor: pointer; }
 .bd-modal-status { white-space: normal; }
+
+/* Požadavky na přidání anime */
+#requestsTable { width: 100%; border-collapse: collapse; }
+#requestsTable th, #requestsTable td { padding: 6px 10px; text-align: left; border-bottom: 1px solid #2a2a2a; }
+.req-actions { white-space: nowrap; text-align: right; }
+button.req-approve, button.req-reject {
+  border-radius: 6px; padding: 3px 10px; cursor: pointer; font-size: 13px; margin-left: 6px;
+  background: transparent; border: 1px solid #3a6c4a; color: #6fdc8c;
+}
+button.req-approve:hover { background: rgba(80,220,120,.15); border-color: #6fdc8c; }
+button.req-reject { border-color: #a03434; color: #ff5c5c; }
+button.req-reject:hover { background: rgba(255,60,60,.15); border-color: #ff5c5c; }
+button.req-approve:disabled, button.req-reject:disabled { opacity: .5; cursor: default; }
