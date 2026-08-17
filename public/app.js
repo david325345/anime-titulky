@@ -138,7 +138,44 @@ function renderPager(d) {
   $('#nextBtn').disabled = d.page >= d.pages;
 }
 
-function load() { loadOverview(); loadSubs(); }
+async function loadRequests() {
+  try {
+    const d = await (await fetch('/api/requests?status=pending')).json();
+    renderRequests(d.requests || []);
+  } catch (e) { /* ignoruj */ }
+}
+
+function renderRequests(reqs) {
+  const panel = document.getElementById('requestsPanel');
+  const body = document.getElementById('requestsBody');
+  const count = document.getElementById('reqCount');
+  if (!panel || !body) return;
+  if (!reqs.length) { panel.style.display = 'none'; return; }
+  panel.style.display = '';
+  count.textContent = `(${reqs.length})`;
+  body.innerHTML = reqs.map((r) => {
+    const title = (r.title || '—').replace(/\s*-\s*Hiyori$/i, '');
+    const date = (r.requested_at || '').replace('T', ' ').slice(0, 16);
+    const alLink = r.anilist_id ? `<a href="https://anilist.co/anime/${r.anilist_id}" target="_blank">${r.anilist_id}</a>` : '—';
+    const hLink = `<a href="https://hiyori.cz/anime/${r.hiyori_id}" target="_blank">${r.hiyori_id}</a>`;
+    return `<tr>
+      <td>${escapeHtml(title)}</td>
+      <td>${hLink}</td>
+      <td>${alLink}</td>
+      <td class="muted">${date}</td>
+      <td class="req-actions">
+        <button class="req-approve" data-id="${r.id}" title="Přidat anime (všechny díly)">✓ Přidat</button>
+        <button class="req-reject" data-id="${r.id}" title="Zamítnout požadavek">✗ Zamítnout</button>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function load() { loadOverview(); loadSubs(); loadRequests(); }
 
 $('#runBtn').addEventListener('click', async () => {
   $('#runBtn').disabled = true;
@@ -658,6 +695,42 @@ $('#subsTable').addEventListener('click', async (e) => {
     return;
   }
 });
+
+// Požadavky na přidání — Přidat / Zamítnout
+const requestsTable = document.getElementById('requestsTable');
+if (requestsTable) {
+  requestsTable.addEventListener('click', async (e) => {
+    const ap = e.target.closest('button.req-approve');
+    if (ap) {
+      const id = ap.dataset.id;
+      if (!confirm('Přidat anime a stáhnout všechny díly?')) return;
+      ap.disabled = true;
+      ap.textContent = '⏳ Přidávám…';
+      try {
+        const r = await (await fetch(`/api/requests/${id}/approve`, { method: 'POST' })).json();
+        if (r.error) { alert('Chyba: ' + r.error); ap.disabled = false; ap.textContent = '✓ Přidat'; }
+        else { loadRequests(); loadSubs(); loadOverview(); }
+      } catch (err) {
+        alert('Chyba: ' + err.message); ap.disabled = false; ap.textContent = '✓ Přidat';
+      }
+      return;
+    }
+    const rj = e.target.closest('button.req-reject');
+    if (rj) {
+      const id = rj.dataset.id;
+      if (!confirm('Zamítnout tento požadavek?')) return;
+      rj.disabled = true;
+      try {
+        const r = await (await fetch(`/api/requests/${id}/reject`, { method: 'POST' })).json();
+        if (r.error) { alert('Chyba: ' + r.error); rj.disabled = false; }
+        else { loadRequests(); }
+      } catch (err) {
+        alert('Chyba: ' + err.message); rj.disabled = false;
+      }
+      return;
+    }
+  });
+}
 
 // ==================================================================
 // AKIHABARA ARCHIV (read-only sekce)
