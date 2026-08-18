@@ -35,7 +35,9 @@ function filenameFromCD(cd) {
 // zahazujeme obsah závorky i všechny mezery, pomlčky a tečky.
 function releaseKey(s) {
   return String(s || '')
-    .replace(/\([^)]*\)/g, '')   // (MTBB), (Ember) …
+    .replace(/[([{][^)\]}]*[)\]}]/g, '') // (MTBB), [BD 1080p], {…} — bracket tagy
+    .replace(/\b\d{3,4}p\b/gi, '') // 720p / 1080p / 480p / 2160p — kvalita není součást skupiny
+    .replace(/\b(x?26[45]|hevc|avc|10bit|8bit|web-?dl|webrip|bd(rip)?|blu-?ray)\b/gi, '') // další tech tagy
     .replace(/[\s._-]+/g, '')    // mezery, pomlčky, tečky, podtržítka
     .toLowerCase()
     .trim();
