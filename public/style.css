@@ -220,3 +220,11 @@ button.req-approve:hover { background: rgba(80,220,120,.15); border-color: #6fdc
 button.req-reject { border-color: #a03434; color: #ff5c5c; }
 button.req-reject:hover { background: rgba(255,60,60,.15); border-color: #ff5c5c; }
 button.req-approve:disabled, button.req-reject:disabled { opacity: .5; cursor: default; }
+
+/* Smazat jen přečas (v machine-row) — malé decentní tlačítko */
+button.del-machine {
+  background: transparent; border: 1px solid #a03434; color: #ff5c5c;
+  border-radius: 6px; padding: 1px 8px; cursor: pointer; font-size: 12px; line-height: 1.4; margin-left: 4px;
+}
+button.del-machine:hover { background: rgba(255,60,60,.18); border-color: #ff5c5c; }
+button.del-machine:disabled { opacity: .4; cursor: default; }
