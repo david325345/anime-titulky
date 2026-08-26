@@ -177,5 +177,12 @@ export async function download(sub) {
   const saved = await saveSubFile(sub, buf, rawName);
   if (variant.release) setRelease(sub.sub_id, variant.release);
 
-  return saved; // run.js označí záznam jako downloaded
+  // Ostatní varianty, které hns nabízel, ale nepoužily se (stáhla se jen jedna).
+  // Uloží se jako upozornění v dashboardu → ať je vidět, že jde doplnit ručně.
+  const unused = variants
+    .filter((v) => v !== variant && (v.release || '').trim())
+    .map((v) => v.release.trim());
+  const unusedStr = [...new Set(unused)].join(', ');
+
+  return { ...saved, unused_variants: unusedStr || null };
 }
