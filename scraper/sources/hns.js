@@ -126,9 +126,20 @@ function parseVariants($) {
 // nemá vyplněný, vezme se první (typicky jediný) řádek. Když ho má, ale na
 // stránce takový není, vrací null → volající to nahlásí jako chybu.
 function pickVariant(variants, wantedRelease) {
-  const key = releaseKey(wantedRelease);
-  if (!key) return variants[0];
-  return variants.find((v) => releaseKey(v.release) === key) || null;
+  // hiyori může dát VÍC release v jednom stringu ("Judas, Subsplease"), zatímco
+  // hns je má jako samostatné varianty. Rozdělíme na části a zkusíme každou —
+  // vrátíme první variantu, která se trefí (preferujeme pořadí z hiyori).
+  const wanted = String(wantedRelease || '')
+    .split(/[,/;|]+/)            // oddělovače víc release: čárka, lomítko, středník, roura
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const keys = (wanted.length ? wanted : [wantedRelease]).map(releaseKey).filter(Boolean);
+  if (!keys.length) return variants[0];
+  for (const key of keys) {
+    const hit = variants.find((v) => releaseKey(v.release) === key);
+    if (hit) return hit;
+  }
+  return null;
 }
 
 // stáhne jeden .ass podle varianty (POST na epUrl)
