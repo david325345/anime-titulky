@@ -143,6 +143,10 @@ db.exec('CREATE INDEX IF NOT EXISTS idx_subs_machine_of ON subs(machine_of)');
 // Rozlišuje ID prostory (hiyori sub_id vs archivní akihabara_id se můžou krýt),
 // aby vazba machine_of byla jednoznačná. NULL u legacy řádků bereme jako hiyori.
 ensureColumn('subs', 'machine_source', 'TEXT');
+// unused_variants = seznam release, které zdroj (hns) nabízel navíc, ale nepoužily
+// se (stáhla se jen jedna varianta). Slouží jen jako upozornění v dashboardu, ať
+// je vidět, že by šlo doplnit další variantu ručně. Text (čárkou oddělené názvy).
+ensureColumn('subs', 'unused_variants', 'TEXT');
 
 // Preferovaný BD/DVD release na anime (sticky): jakmile se jeden díl přečasuje
 // úspěšně proti nějakému Tosho releasu, drží se to samé at_id i pro další díly
@@ -255,14 +259,15 @@ export const insertSub = (row) =>
 
 const _markDownloaded = db.prepare(`
   UPDATE subs SET status='downloaded', filename=@filename, local_path=@local_path,
-    file_bytes=@file_bytes, r2_key=@r2_key, downloaded_at=@downloaded_at, error=NULL
+    file_bytes=@file_bytes, r2_key=@r2_key, downloaded_at=@downloaded_at, error=NULL,
+    unused_variants=@unused_variants
   WHERE sub_id=@sub_id
 `);
 const _markFailed = db.prepare(
   "UPDATE subs SET status='failed', error=@error WHERE sub_id=@sub_id"
 );
 export const markDownloaded = (row) =>
-  _markDownloaded.run({ downloaded_at: new Date().toISOString(), ...row });
+  _markDownloaded.run({ downloaded_at: new Date().toISOString(), unused_variants: null, ...row });
 export const markFailed = (sub_id, error) =>
   _markFailed.run({ sub_id, error: String(error).slice(0, 500) });
 
