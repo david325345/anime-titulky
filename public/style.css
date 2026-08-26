@@ -228,3 +228,7 @@ button.del-machine {
 }
 button.del-machine:hover { background: rgba(255,60,60,.18); border-color: #ff5c5c; }
 button.del-machine:disabled { opacity: .4; cursor: default; }
+
+/* Upozornění, že zdroj nabízel i nepoužitou variantu (doplnit ručně přes 📤) */
+.unused-flag { margin-left: 4px; cursor: help; font-size: 14px; opacity: .85; }
+.unused-flag:hover { opacity: 1; }
