@@ -238,6 +238,7 @@ async function downloadQueue({ log, stats }) {
         local_path: res.local_path,
         file_bytes: res.file_bytes,
         r2_key: res.r2_key ?? null,
+        unused_variants: res.unused_variants ?? null,
       });
       stats.downloaded++;
     } catch (e) {
@@ -325,6 +326,7 @@ export async function downloadSingle(subId, { log = console.log } = {}) {
       local_path: res.local_path,
       file_bytes: res.file_bytes,
       r2_key: res.r2_key ?? null,
+        unused_variants: res.unused_variants ?? null,
     });
     log(`✓ ručně staženo sub ${subId} (${res.filename})`);
     return { ok: true, filename: res.filename, file_bytes: res.file_bytes };
