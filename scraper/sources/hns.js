@@ -68,8 +68,15 @@ function episodeLinks($) {
 //   3) když takový není    → blok podle čísla, ale JEN když počet dílů na
 //                            stránce odpovídá tomu, co hiyori pro anime eviduje
 //   4) jinak chyba — mapování se nedá určit, ať se radši doplní ručně
+// hns běží na https; http:// URL vrací jen redirect stub (getHtml ho nenásleduje)
+// → normalizuj http→https, ať parser dostane skutečnou stránku.
+function normalizeHnsUrl(url) {
+  return String(url || '').replace(/^http:\/\//i, 'https://');
+}
+
 async function resolveEpisodeUrl(sub) {
-  if (/\/anime\/episode\//i.test(sub.url)) return sub.url;
+  const url = normalizeHnsUrl(sub.url);
+  if (/\/anime\/episode\//i.test(url)) return url;
 
   const sibling = findEpisodeUrlSibling({
     hiyori_id: sub.hiyori_id,
@@ -77,13 +84,13 @@ async function resolveEpisodeUrl(sub) {
     extern_domain: 'hns.sk',
     sub_id: sub.sub_id,
   });
-  if (sibling) return sibling;
+  if (sibling) return normalizeHnsUrl(sibling);
 
-  const html = await getHtml(sub.url);
+  const html = await getHtml(url);
   const $ = cheerio.load(html);
   const links = episodeLinks($);
   if (!links.length) {
-    throw new Error(`hns.sk: na stránce seriálu nejsou odkazy na epizody (${sub.url}).`);
+    throw new Error(`hns.sk: na stránce seriálu nejsou odkazy na epizody (${url}).`);
   }
 
   const maxOnPage = Math.max(...links.map((l) => l.n));
