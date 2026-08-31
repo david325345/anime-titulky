@@ -98,21 +98,44 @@ async function ensureLogin() {
   if (!isLoggedIn()) await login();
 }
 
-// GET HTML stránky (s auto-reloginem)
+// GET HTML stránky (s auto-reloginem, timeoutem a kontrolou úplnosti).
+// Kamui je pomalý (8-15 s) → bez timeoutu request občas vrátí useknuté HTML a
+// parser pak nevidí poslední díly. Proto: 30s timeout, kontrola „</html>" (celá
+// stránka dorazila) a až 3 pokusy s pauzou; neúplné/spadlé HTML se zkusí znovu.
 export async function getHtml(url) {
   await ensureLogin();
   const abs = url.startsWith('http') ? url : BASE + url;
-  for (let attempt = 0; attempt < 2; attempt++) {
+  let lastText = '';
+  for (let attempt = 0; attempt < 3; attempt++) {
     await hostGate(abs);
-    await hostGate(abs);
-    const res = await fetch(abs, { headers: headers({}, true), redirect: 'follow' });
-    capture(res);
-    const text = await res.text();
-    // přihlášenou stránku poznáme podle odkazu na logout/wp-admin
-    if (/logout|wp-admin|wordpress_logged_in/i.test(text) || isLoggedIn()) return text;
+    let text = '';
+    try {
+      const res = await fetch(abs, {
+        headers: headers({}, true),
+        redirect: 'follow',
+        signal: AbortSignal.timeout(30000), // pomalý kamui stihne, ale nevisí donekonečna
+      });
+      capture(res);
+      text = await res.text();
+    } catch (e) {
+      // timeout / spadlé spojení → zkus znovu (pauza), po vyčerpání vyhoď chybu
+      if (attempt < 2) { await new Promise((r) => setTimeout(r, 1500)); continue; }
+      throw new Error(`kamui-subs: načtení stránky selhalo (${e.message}): ${abs}`);
+    }
+    lastText = text;
+    const complete = /<\/html>/i.test(text); // celá stránka dorazila
+    const loggedIn = /logout|wp-admin|wordpress_logged_in/i.test(text) || isLoggedIn();
+    if (complete && loggedIn) return text;
+    // fakt odhlášený (a stránka došla celá) → jednou zkus relogin
+    if (!loggedIn && complete && attempt === 0) { await login(); continue; }
+    // neúplné HTML (useklo se) → retry, ať parser nedostane půlku stránky
+    if (!complete && attempt < 2) { await new Promise((r) => setTimeout(r, 1500)); continue; }
+    // poslední pokus: když je aspoň přihlášená, vrať; jinak vrať co je (parser vyhodí smysluplnou chybu)
+    if (loggedIn) return text;
     if (attempt === 0) { await login(); continue; }
-    return text; // vrátíme i tak, parser si poradí / vyhodí chybu
+    return text;
   }
+  return lastText;
 }
 
 // GET binárního souboru (archiv). Vrací {buf, contentDisposition, contentType}.
