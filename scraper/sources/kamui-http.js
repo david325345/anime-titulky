@@ -110,8 +110,12 @@ export async function getHtml(url) {
     await hostGate(abs);
     let text = '';
     try {
-      const res = await fetch(abs, {
-        headers: headers({}, true),
+      // Cache-busting: dlouho běžící server dostával z LiteSpeed/WP cache starší
+      // verzi stránky (kompletní, ale bez nejnovějšího dílu), zatímco čerstvý
+      // proces viděl aktuální. Parametr + no-cache hlavičky vynutí čerstvou verzi.
+      const bust = abs + (abs.includes('?') ? '&' : '?') + '_=' + Date.now();
+      const res = await fetch(bust, {
+        headers: headers({ 'Cache-Control': 'no-cache', Pragma: 'no-cache' }, true),
         redirect: 'follow',
         signal: AbortSignal.timeout(30000), // pomalý kamui stihne, ale nevisí donekonečna
       });
