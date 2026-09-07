@@ -133,16 +133,22 @@ function parseVariants($) {
 // nemá vyplněný, vezme se první (typicky jediný) řádek. Když ho má, ale na
 // stránce takový není, vrací null → volající to nahlásí jako chybu.
 function pickVariant(variants, wantedRelease) {
-  // hiyori může dát VÍC release v jednom stringu ("Judas, Subsplease"), zatímco
-  // hns je má jako samostatné varianty. Rozdělíme na části a zkusíme každou —
-  // vrátíme první variantu, která se trefí (preferujeme pořadí z hiyori).
-  const wanted = String(wantedRelease || '')
-    .split(/[,/;|]+/)            // oddělovače víc release: čárka, lomítko, středník, roura
+  // 1) Nejdřív zkus CELÝ řetězec — název varianty může sám obsahovat oddělovač
+  //    („Subsplease / ASW" je jeden release, ne dva).
+  const whole = releaseKey(wantedRelease);
+  if (!whole) return variants[0];
+  const exact = variants.find((v) => releaseKey(v.release) === whole);
+  if (exact) return exact;
+
+  // 2) Teprve pak ber víc release v jednom stringu („Judas, Subsplease“) a zkus
+  //    každý zvlášť — hns je nabízí jako samostatné varianty.
+  const parts = String(wantedRelease || '')
+    .split(/[,;|/]+/)
     .map((s) => s.trim())
+    .filter(Boolean)
+    .map(releaseKey)
     .filter(Boolean);
-  const keys = (wanted.length ? wanted : [wantedRelease]).map(releaseKey).filter(Boolean);
-  if (!keys.length) return variants[0];
-  for (const key of keys) {
+  for (const key of parts) {
     const hit = variants.find((v) => releaseKey(v.release) === key);
     if (hit) return hit;
   }
