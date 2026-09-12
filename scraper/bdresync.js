@@ -202,7 +202,7 @@ function detectKind(name, videoSource) {
 }
 
 // Řazení releasů: BD před DVD → 'PGS' v názvu dozadu → víc seedů → žebříček skupin.
-function rankReleases(rels) {
+function rankReleases(rels, prefAtId = null) {
   const rank = (g) => {
     const i = CONFIG.bdGroupRanking.findIndex((x) => x.toLowerCase() === (g || '').toLowerCase());
     return i === -1 ? 999 : i;
@@ -210,12 +210,15 @@ function rankReleases(rels) {
   const isPgs = (n) => /pgs/i.test(n || '');
   return [...rels].sort(
     (a, b) =>
-      (a.kind === '🤖 BD' ? 0 : 1) - (b.kind === '🤖 BD' ? 0 : 1) ||
-      (isPgs(a.name) ? 1 : 0) - (isPgs(b.name) ? 1 : 0) ||
-      b.seeders - a.seeders ||
+      (a.kind === '🤖 BD' ? 0 : 1) - (b.kind === '🤖 BD' ? 0 : 1) ||  // BD před DVD
+      (isPgs(a.name) ? 1 : 0) - (isPgs(b.name) ? 1 : 0) ||            // bitmapové dozadu
+      b.seeders - a.seeders ||                                        // ROZHODUJE: víc seedů
+      (Number(b.at_id) === Number(prefAtId) ? 1 : 0) -                // při shodě: osvědčený
+        (Number(a.at_id) === Number(prefAtId) ? 1 : 0) ||
       rank(a.group) - rank(b.group)
   );
 }
+
 
 // PRIMÁRNÍ zdroj releasů: indexer /search?anilist&episode (sezónu pinuje anilist,
 // specialy/díly řeší indexer). Dvoufázově kvůli líným seedům: 1) zahřát →
@@ -266,7 +269,8 @@ async function indexerReleases(sub) {
   // mrtvé 0-seed vyhoď, pokud existuje aspoň jeden živý (jinak nech všechny)
   if (cands.some((c) => c.seeders > 0)) cands = cands.filter((c) => c.seeders > 0);
 
-  return rankReleases(cands);
+  const pref = sub.anilist_id ? getBdPref(sub.anilist_id) : null;
+  return rankReleases(cands, pref && pref.at_id);
 }
 
 // FALLBACK: starý postup feed ?aid= (když indexer tosho_results nemá, např. Sekirei).
@@ -449,13 +453,6 @@ export async function bdResync(sub, source = 'hiyori') {
   if (!releases.length) { via = 'aid-fallback'; releases = await fallbackReleases(sub); }
   if (!releases.length) {
     return { ok: false, stage: 'reference', via, error: 'Na Toshu (ani přes indexer) není BD/DVD release.' };
-  }
-
-  // sticky: osvědčený release u tohohle anime zkus první (batch mívá všechny díly)
-  const pref = sub.anilist_id ? getBdPref(sub.anilist_id) : null;
-  if (pref && pref.at_id) {
-    const i = releases.findIndex((r) => Number(r.at_id) === Number(pref.at_id));
-    if (i > 0) releases.unshift(releases.splice(i, 1)[0]);
   }
 
   const cz = await loadCz(sub);
