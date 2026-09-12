@@ -257,11 +257,16 @@ async function indexerReleases(sub) {
   if (!tr.length && ids && ids.anidb_id) {
     tr = await fetchTosho(`/search?anidb=${ids.anidb_id}${seasonQ}&episode=${sub.episode}`);
   }
-  if (!tr.length) return [];
+  if (!tr.length) {
+    const empty = [];
+    empty.stats = { raw: 0, season, via: null, anidb: (ids && ids.anidb_id) || null, noResults: true };
+    return empty;
+  }
 
-  let cands = tr
-    // jiná sezóna ven (null u kterékoli strany necháme projít)
-    .filter((t) => season == null || t.season == null || Number(t.season) === season)
+  const stats = { raw: tr.length, season, via, anidb: (ids && ids.anidb_id) || null };
+  const afterSeason = tr.filter((t) => season == null || t.season == null || Number(t.season) === season);
+  stats.seasonDropped = tr.length - afterSeason.length;
+  let cands = afterSeason
     // jen BD/DVD — WEB reference má stejné časování jako náš CZ titulek
     .filter((t) => isBdOrDvd(t.name, t.video_source))
     .map((t) => {
@@ -281,11 +286,17 @@ async function indexerReleases(sub) {
       };
     });
 
+  stats.webDropped = afterSeason.length - cands.length;
+  stats.bdCount = cands.length;
+
   // mrtvé 0-seed vyhoď, pokud existuje aspoň jeden živý (jinak nech všechny)
   if (cands.some((c) => c.seeders > 0)) cands = cands.filter((c) => c.seeders > 0);
+  stats.alive = cands.length;
 
   const pref = sub.anilist_id ? getBdPref(sub.anilist_id) : null;
-  return rankReleases(cands, pref && pref.at_id);
+  const releases = rankReleases(cands, pref && pref.at_id);
+  releases.stats = stats;
+  return releases;
 }
 
 // FALLBACK: starý postup feed ?aid= (když indexer tosho_results nemá, např. Sekirei).
@@ -314,13 +325,15 @@ async function fallbackReleases(sub) {
 // titulkové stopy (ne Signs/Songs; Full/Dialogue napřed). Vrací {fileName, attIds}.
 async function episodeAttachments(atId, episode, target = null) {
   let data;
-  try { data = await toshoJson(`show=torrent&id=${atId}`); } catch { return null; }
+  try { data = await toshoJson(`show=torrent&id=${atId}`); } catch { return { reason: 'feed-error' }; }
   const files = Array.isArray(data) ? data : data.files || [];
+  // Tosho release nezpracovalo (status 'skipped' apod.) → nemá rozepsané soubory
+  if (!files.length) return { reason: 'not-processed', status: (data && data.status) || null };
+
   const base = (p) => String(p || '').split('/').pop();
   let file = null;
 
-  // 1) přesně podle toho, co řekl indexer (crc32, jinak jméno souboru) —
-  //    žádné hádání z názvu, řeší OVA kolize i absolutní číslování
+  // 1) přesně podle toho, co řekl indexer (crc32, jinak jméno souboru)
   if (target && target.crc32) {
     file = files.find((f) => String(f.crc32 || '').toLowerCase() === target.crc32) || null;
   }
@@ -340,16 +353,22 @@ async function episodeAttachments(atId, episode, target = null) {
       }
     }
   }
-  if (!file) return null;
+  if (!file) return { reason: 'no-file' };
 
-  const attIds = (file.attachments || [])
-    .filter((a) => a.type === 'subtitle')
-    .map((a) => ({ id: a.id, nm: (a.info?.name || '').toLowerCase() }))
-    .filter((x) => !/sign|song/.test(x.nm))  // Signs/Songs vynech
-    .filter((x) => !/pgs|sup/.test(x.nm))    // bitmapové stopy alass nezvládne
+  const all = (file.attachments || []).filter((a) => a.type === 'subtitle');
+  const named = all.map((a) => ({ id: a.id, nm: (a.info?.name || '').toLowerCase() }));
+  const signs = named.filter((x) => /sign|song/.test(x.nm)).length;
+  const bitmap = named.filter((x) => !/sign|song/.test(x.nm) && /pgs|\bsup\b/.test(x.nm)).length;
+  const attIds = named
+    .filter((x) => !/sign|song/.test(x.nm))
+    .filter((x) => !/pgs|\bsup\b/.test(x.nm))
     .sort((x, y) => (/(full|dialog)/.test(y.nm) ? 1 : 0) - (/(full|dialog)/.test(x.nm) ? 1 : 0))
     .map((x) => x.id);
-  return { fileName: file.filename, attIds };
+  if (!attIds.length) {
+    return { reason: all.length ? (bitmap ? 'only-bitmap' : 'only-signs') : 'no-tracks',
+             fileName: file.filename, signs, bitmap };
+  }
+  return { fileName: file.filename, attIds, signs, bitmap };
 }
 
 async function downloadAttachXz(attachId) {
@@ -465,22 +484,44 @@ export async function bdResync(sub, source = 'hiyori') {
   // releasy: primárně indexer, fallback starý ?aid=
   let via = 'indexer';
   let releases = await indexerReleases(sub);
+  const st = releases.stats || {};
   if (!releases.length) { via = 'aid-fallback'; releases = await fallbackReleases(sub); }
+
   if (!releases.length) {
-    return { ok: false, stage: 'reference', via, error: 'Na Toshu (ani přes indexer) není BD/DVD release.' };
+    // Řekni PŘESNĚ, proč nic není — ne paušální „není BD release".
+    let error;
+    if (st.noResults || !st.raw) {
+      error = st.anidb
+        ? `Indexer ani Anime Tosho nemají pro tohle anime žádný release (hledáno přes anidb ${st.anidb}${st.season != null ? `, sezóna ${st.season}` : ''}).`
+        : 'Indexer pro tohle anime nemá žádné Tosho releasy — nejspíš chybí mapování na AniDB. Použij ruční referenci (.ass/.srt).';
+    } else if (st.bdCount === 0) {
+      error = `Na Toshu je ${st.raw} releasů, ale žádný BD/DVD — jen WEB ripy (${st.webDropped}), a ty mají stejné časování jako původní titulek. Použij ruční referenci (.ass/.srt).`;
+    } else {
+      error = `Žádný použitelný BD/DVD release (z ${st.raw} nalezených).`;
+    }
+    return { ok: false, stage: 'reference', via, stats: st, error };
   }
 
   const cz = await loadCz(sub);
   if (!cz) return { ok: false, stage: 'cz', via, error: 'CZ titulek se nepodařilo stáhnout z R2.' };
 
-  // zkoušej releasy v pořadí; v každém dialogové stopy; PGS/neparsovatelné přeskakuj
+  // zkoušej releasy v pořadí; zaznamenávej, PROČ který vypadl
   let tried = 0;
-  let skipped = 0;
+  const why = { notProcessed: 0, noFile: 0, onlyBitmap: 0, onlySigns: 0, noTracks: 0, syncFail: 0, feedError: 0 };
   let lastDetail = null;
   for (const rel of releases) {
     if (tried >= 8) break; // strop na počet pokusů (Tosho + čas)
     const ea = await episodeAttachments(rel.at_id, sub.episode, { crc32: rel.targetCrc32, filename: rel.targetFilename });
-    if (!ea || !ea.attIds.length) continue;
+    if (!ea || !ea.attIds || !ea.attIds.length) {
+      const r = (ea && ea.reason) || 'no-file';
+      if (r === 'not-processed') why.notProcessed++;
+      else if (r === 'feed-error') why.feedError++;
+      else if (r === 'only-bitmap') why.onlyBitmap++;
+      else if (r === 'only-signs') why.onlySigns++;
+      else if (r === 'no-tracks') why.noTracks++;
+      else why.noFile++;
+      continue;
+    }
     for (const attId of ea.attIds) {
       if (tried >= 8) break;
       tried++;
@@ -496,22 +537,32 @@ export async function bdResync(sub, source = 'hiyori') {
           machine_sub_id: saved.machineId, file_bytes: saved.bytes, tried,
         };
       }
-      // Vadný CZ vstup → další reference to nespraví, končíme hned (jinak se
-      // zbytečně projede 8 kandidátů a request může vypršet na proxy).
+      // Vadný CZ vstup → další reference to nespraví, končíme hned.
       if (sync.bad_input === 'subtitle') {
         return {
           ok: false, stage: 'cz', via, tried,
-          error: 'CZ titulek má vadný formát, který alass nepřečte (a narovnání nepomohlo). Oprav zdrojový titulek nebo použij ruční referenci.',
+          error: 'CZ titulek má vadný formát, který alass nepřečte (ani po narovnání). Oprav zdrojový titulek nebo použij ruční referenci.',
           detail: sync,
         };
       }
-      if (sync.non_text) skipped++;
+      if (sync.non_text) why.onlyBitmap++; else why.syncFail++;
       lastDetail = sync;
     }
   }
+
+  // Slož hlášku z toho, co se REÁLNĚ stalo.
+  const parts = [];
+  if (why.notProcessed) parts.push(`${why.notProcessed}× Anime Tosho release nezpracovalo (nemá rozepsané soubory)`);
+  if (why.noFile) parts.push(`${why.noFile}× se v releasu nenašel soubor dílu`);
+  if (why.onlyBitmap) parts.push(`${why.onlyBitmap}× jen bitmapové titulky (PGS)`);
+  if (why.onlySigns) parts.push(`${why.onlySigns}× jen Signs & Songs`);
+  if (why.noTracks) parts.push(`${why.noTracks}× soubor nemá titulkové stopy`);
+  if (why.syncFail) parts.push(`${why.syncFail}× přečas selhal`);
+  if (why.feedError) parts.push(`${why.feedError}× Anime Tosho neodpovědělo`);
+  const detail = parts.length ? parts.join(', ') : 'žádný kandidát nešel použít';
   return {
-    ok: false, stage: 'reference', via, tried, skipped,
-    error: 'Nenašel jsem použitelnou textovou referenci — releasy jsou nejspíš bitmapové (PGS). Použij ruční referenci (.ass/.srt).',
+    ok: false, stage: 'reference', via, tried, stats: st, why,
+    error: `Nenašel jsem použitelnou referenci z ${releases.length} BD/DVD releasů: ${detail}. Použij ruční referenci (.ass/.srt).`,
     detail: lastDetail,
   };
 }
