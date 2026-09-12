@@ -230,23 +230,38 @@ async function indexerReleases(sub) {
     ? `mal=${sub.mal_id}`
     : null;
   if (!idParam) return [];
-  const path = `/search?${idParam}&episode=${sub.episode}`;
 
-  // cílová sezóna z indexeru (spolehlivé) — vyřadí batche jiné sezóny
-  let targetSeason = null;
-  const ri = await indexerRequest(`/api/resolve-ids?${idParam}&episode=${sub.episode}`).catch(() => null);
-  if (ri && ri.json && Number.isFinite(Number(ri.json.season))) targetSeason = Number(ri.json.season);
+  // Sezóna z indexeru. Když ji nevrátí (season=null), jde nejspíš o SPECIAL/OVA
+  // s vlastním AniList ID → zkus sezónu 0. Bez správné sezóny by indexer bral
+  // číslo dílu jako absolutní a namapoval ho na 1. díl hlavní série.
+  let ids = null;
+  const r0 = await indexerRequest(`/api/resolve-ids?${idParam}&episode=${sub.episode}`).catch(() => null);
+  if (r0 && r0.json) ids = r0.json;
+  let season = ids && Number.isFinite(Number(ids.season)) ? Number(ids.season) : null;
+  if (season == null) {
+    const rs = await indexerRequest(`/api/resolve-ids?${idParam}&season=0&episode=${sub.episode}`).catch(() => null);
+    if (rs && rs.json && Number(rs.json.season) === 0 && rs.json.anidb_eid) { ids = rs.json; season = 0; }
+  }
+  const seasonQ = season != null ? `&season=${season}` : '';
 
-  const r1 = await indexerRequest(path).catch(() => null);
-  const tr1 = (r1 && r1.json && r1.json.tosho_results) || [];
-  if (!tr1.length) return []; // bez Tosho dat → hned fallback (žádné čekání)
-  await new Promise((r) => setTimeout(r, 3000)); // seedy se načtou líně po 1. dotazu
-  const r2 = await indexerRequest(path).catch(() => null);
-  const tr = (r2 && r2.json && r2.json.tosho_results) || tr1;
+  // /search primárně přes anilist/mal; u specialů bývá prázdné → zkus anidb
+  const fetchTosho = async (path) => {
+    const r1 = await indexerRequest(path).catch(() => null);
+    const t1 = (r1 && r1.json && r1.json.tosho_results) || [];
+    if (!t1.length) return [];
+    await new Promise((r) => setTimeout(r, 3000)); // seedy se načtou líně po 1. dotazu
+    const r2 = await indexerRequest(path).catch(() => null);
+    return (r2 && r2.json && r2.json.tosho_results) || t1;
+  };
+  let tr = await fetchTosho(`/search?${idParam}${seasonQ}&episode=${sub.episode}`);
+  if (!tr.length && ids && ids.anidb_id) {
+    tr = await fetchTosho(`/search?anidb=${ids.anidb_id}${seasonQ}&episode=${sub.episode}`);
+  }
+  if (!tr.length) return [];
 
   let cands = tr
     // jiná sezóna ven (null u kterékoli strany necháme projít)
-    .filter((t) => targetSeason == null || t.season == null || Number(t.season) === targetSeason)
+    .filter((t) => season == null || t.season == null || Number(t.season) === season)
     // jen BD/DVD — WEB reference má stejné časování jako náš CZ titulek
     .filter((t) => isBdOrDvd(t.name, t.video_source))
     .map((t) => {
