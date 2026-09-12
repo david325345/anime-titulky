@@ -9,8 +9,7 @@ import {
   overviewCounts, recentSubs, recentRuns, getMeta, getSub, findSubs, subsAvailability,
   listSubs, deleteSub, recentlyAdded, markDownloaded, allSubs, updateSubMeta,
   listAkihabaraAnime, akihabaraAnimeDetail, akihabaraStats, resetSubDownload,
-  machineVersionsFor, getAkiSub, bulkBdTargetsHiyori, bulkBdTargetsAki, releaseGroup, subRelease,
-  insertRequest, listRequests, getRequest, setRequestStatus, requestStatusForAnilist,
+  machineVersionsFor, getAkiSub, bulkBdTargetsHiyori, bulkBdTargetsAki,
 } from './db.js';
 import * as hanabi from './scraper/sources/hanabi.js';
 import { saveSubFile } from './scraper/download.js';
@@ -71,7 +70,7 @@ app.get('/api/subs', (req, res) => {
     sub_id: r.sub_id,
     lang: r.lang,
     group: r.group_name,
-    release: subRelease(r),
+    release: r.release,
     version: r.version,
     episode: r.episode,
     kind: r.kind,
@@ -86,19 +85,8 @@ app.get('/api/subs', (req, res) => {
 });
 
 // GET /api/subs/available?anilist=154587&mal=52991[&episode=5]
-// Povolené originy pro veřejné read/request endpointy (extension na těchto webech).
-const CORS_ALLOWED_ORIGINS = ['https://hiyori.cz', 'https://myanimelist.net', 'https://anilist.co'];
-function applyCors(req, res) {
-  const origin = req.headers.origin;
-  if (CORS_ALLOWED_ORIGINS.includes(origin)) {
-    res.setHeader('Access-Control-Allow-Origin', origin);
-    res.setHeader('Vary', 'Origin');
-  }
-}
-
 // Rychlá odpověď, zda pro anime/díl máme titulky na R2 (bez plných dat).
 app.get('/api/subs/available', (req, res) => {
-  applyCors(req, res); // povol čtení z whitelistovaných extension originů
   const anilist = Number(req.query.anilist) || null;
   const mal = Number(req.query.mal) || null;
   const episode = req.query.episode != null && req.query.episode !== ''
@@ -117,50 +105,8 @@ app.get('/api/subs/available', (req, res) => {
     subs_total: a.subs_total,         // kolik titulků celkem (vč. variant)
     langs: a.langs,                   // souhrn jazyků
     episodes: a.episodes,             // [{episode, subs:[{lang,group,release}]}]
-    request_status: requestStatusForAnilist(anilist), // 'pending'|'done'|null — pro tlačítko v extension
   });
 });
-
-// --- Požadavky na přidání anime z hiyori extension (veřejné, PŘED basicAuth) ---
-
-// CORS preflight pro POST /api/request-anime
-app.options('/api/request-anime', (req, res) => {
-  applyCors(req, res);
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  res.sendStatus(204);
-});
-
-// Jednoduchý paměťový rate-limit na IP (20 requestů / hodinu). Resetuje se při
-// restartu — pro anti-spam veřejného endpointu bohatě stačí, žádná další tabulka.
-const reqAnimeHits = new Map(); // ip -> [timestamp, ...]
-function rateOk(ip, maxPerHour = 20) {
-  const now = Date.now();
-  const hourAgo = now - 3600000;
-  const hits = (reqAnimeHits.get(ip) || []).filter((t) => t > hourAgo);
-  if (hits.length >= maxPerHour) { reqAnimeHits.set(ip, hits); return false; }
-  hits.push(now);
-  reqAnimeHits.set(ip, hits);
-  return true;
-}
-
-// POST /api/request-anime — extension pošle hiyori_id (+ volitelně anilist_id, title).
-app.post('/api/request-anime', express.json(), (req, res) => {
-  applyCors(req, res);
-  const ip = String(req.headers['x-forwarded-for'] || req.ip || '').split(',')[0].trim();
-  if (!rateOk(ip)) {
-    return res.status(429).json({ error: 'Příliš mnoho požadavků, zkus to za chvíli.' });
-  }
-  const hiyoriId = Number(req.body?.hiyori_id) || null;
-  if (!hiyoriId || hiyoriId <= 0) {
-    return res.status(400).json({ error: 'Chybí platné hiyori_id.' });
-  }
-  const anilistId = Number(req.body?.anilist_id) || null;
-  const title = req.body?.title ? String(req.body.title).slice(0, 300) : null;
-  const r = insertRequest({ hiyori_id: hiyoriId, anilist_id: anilistId, title, ip });
-  res.json(r); // { status: 'ok' } nebo { status: 'already_requested' }
-});
-
 
 // GET /api/recent[?days=N] — dnes přidané stažené titulky (na R2), seskupené.
 // Bez days = dnešní den od půlnoci. Veřejné (pro addon).
@@ -421,7 +367,7 @@ app.post('/api/sub/:subId/bd-resync', async (req, res) => {
 // ruční přečas na BD (hiyori): reference nahraje uživatel (raw body, .ass/.srt/.xz),
 // filename v query. Zbytek stejný jako auto — uloží strojovou verzi.
 app.post('/api/sub/:subId/bd-resync-manual',
-  express.raw({ type: '*/*', limit: '5mb' }),
+  express.raw({ type: '*/*', limit: '50mb' }),
   async (req, res) => {
     const subId = Number(req.params.subId);
     const sub = getSub(subId);
@@ -500,7 +446,7 @@ app.post('/api/akihabara/:akiId/bd-resync', async (req, res) => {
 });
 
 app.post('/api/akihabara/:akiId/bd-resync-manual',
-  express.raw({ type: '*/*', limit: '5mb' }),
+  express.raw({ type: '*/*', limit: '50mb' }),
   async (req, res) => {
     const row = getAkiSub(Number(req.params.akiId));
     if (!row) return res.status(404).json({ ok: false, error: 'Archivní záznam nenalezen.' });
@@ -631,42 +577,6 @@ app.get('/api/add-anime', async (req, res) => {
   }
 });
 
-// --- Požadavky na přidání anime — admin (za basicAuth, jen user1) ---
-
-// GET /api/requests?status=pending — seznam požadavků pro dashboard.
-app.get('/api/requests', (req, res) => {
-  const status = String(req.query.status || 'pending');
-  res.json({ requests: listRequests(status) });
-});
-
-// POST /api/requests/:id/approve — spustí přidání anime (všechny díly) a označí done.
-app.post('/api/requests/:id/approve', requireUser1, async (req, res) => {
-  const reqRow = getRequest(req.params.id);
-  if (!reqRow) return res.status(404).json({ error: 'Požadavek nenalezen.' });
-  try {
-    const r = await ingestAnime(reqRow.hiyori_id, {}, { manualAdd: true });
-    setRequestStatus(reqRow.id, 'done');
-    res.json({
-      ok: true,
-      hiyori_id: reqRow.hiyori_id,
-      title: (r.title || '').replace(/\s*-\s*Hiyori$/i, ''),
-      anilist_id: r.anilistId,
-      found: r.found,
-      added: r.added,
-      blocked: r.blocked,
-    });
-  } catch (e) {
-    res.status(500).json({ error: 'Nepodařilo se přidat anime: ' + e.message });
-  }
-});
-
-// POST /api/requests/:id/reject — zamítne požadavek.
-app.post('/api/requests/:id/reject', requireUser1, (req, res) => {
-  const n = setRequestStatus(req.params.id, 'rejected');
-  if (!n) return res.status(404).json({ error: 'Požadavek nenalezen.' });
-  res.json({ ok: true });
-});
-
 // ruční vložení hanabi ZIP odkazu → server stáhne z CDN, rozbalí .ass, na R2
 app.post('/api/hanabi-link', express.json(), async (req, res) => {
   const subId = Number(req.body?.sub_id);
@@ -698,7 +608,7 @@ app.post('/api/hanabi-link', express.json(), async (req, res) => {
 // ruční nahrání titulku k existujícímu záznamu (.ass/.srt/.ssa/.zip)
 // soubor jde jako raw binary body, sub_id a filename v query
 app.post('/api/upload-sub',
-  express.raw({ type: '*/*', limit: '5mb' }),
+  express.raw({ type: '*/*', limit: '50mb' }),
   async (req, res) => {
     const subId = Number(req.query.sub_id);
     const rawName = String(req.query.filename || 'titulky').trim();
@@ -772,6 +682,22 @@ app.get('/api/file/:subId', async (req, res) => {
 
   return res.status(404).send('Soubor není k dispozici.');
 });
+
+// Chyby vracej jako JSON — frontend všude dělá res.json(), takže HTML chybová
+// stránka Expressu by skončila jako „Unexpected token '<'". Např. příliš velký
+// nahraný soubor (PayloadTooLargeError).
+app.use((err, req, res, next) => {
+  if (res.headersSent) return next(err);
+  const tooBig = err && (err.type === 'entity.too.large' || err.status === 413);
+  console.error('[error]', req.method, req.path, '-', err && err.message);
+  res.status(tooBig ? 413 : err.status || 500).json({
+    ok: false,
+    error: tooBig
+      ? 'Soubor je příliš velký (limit 50 MB).'
+      : (err && err.message) || 'Neočekávaná chyba serveru.',
+  });
+});
+
 
 app.listen(CONFIG.port, () => {
   console.log(`NimeToDex Titulky běží na portu ${CONFIG.port}`);
