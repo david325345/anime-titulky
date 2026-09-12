@@ -253,17 +253,19 @@ async function indexerReleases(sub) {
     const r2 = await indexerRequest(path).catch(() => null);
     return (r2 && r2.json && r2.json.tosho_results) || t1;
   };
+  let queriedBy = idParam.split('=')[0];   // 'anilist' | 'mal'
   let tr = await fetchTosho(`/search?${idParam}${seasonQ}&episode=${sub.episode}`);
   if (!tr.length && ids && ids.anidb_id) {
+    queriedBy = 'anidb';
     tr = await fetchTosho(`/search?anidb=${ids.anidb_id}${seasonQ}&episode=${sub.episode}`);
   }
   if (!tr.length) {
     const empty = [];
-    empty.stats = { raw: 0, season, via: null, anidb: (ids && ids.anidb_id) || null, noResults: true };
+    empty.stats = { raw: 0, season, queriedBy: null, anidb: (ids && ids.anidb_id) || null, noResults: true };
     return empty;
   }
 
-  const stats = { raw: tr.length, season, via, anidb: (ids && ids.anidb_id) || null };
+  const stats = { raw: tr.length, season, queriedBy, anidb: (ids && ids.anidb_id) || null };
   const afterSeason = tr.filter((t) => season == null || t.season == null || Number(t.season) === season);
   stats.seasonDropped = tr.length - afterSeason.length;
   let cands = afterSeason
