@@ -388,8 +388,11 @@ function bdRefresh(source) {
 }
 function bdReport(r) {
   if (r && r.ok) {
+    const zdroj = [r.group || null, r.seeders != null ? `${r.seeders} seedů` : null]
+      .filter(Boolean).join(' · ');
     alert('✔ Přečas hotový (' + (r.kind || '🤖 BD') + ')\n' +
-      (r.release ? `Release: ${r.release}\n` : '') +
+      (r.release ? `Reference: ${r.release}\n` : '') +
+      (zdroj ? `Zdroj: ${zdroj}\n` : '') +
       `Díl ${r.episode ?? '—'} · formát ${r.format} · ${r.elapsed_ms} ms`);
     return true;
   }
@@ -421,30 +424,37 @@ async function runBulkBd(targetsUrl, source) {
   catch (e) { if (overlay.isConnected) status.textContent = 'Chyba: ' + e.message; return; }
   const targets = (data && data.targets) || [];
   if (!targets.length) {
-    if (overlay.isConnected) status.textContent = 'Žádné díly k přečasu (vše hotové nebo nic staženého).';
+    if (overlay.isConnected) status.textContent = 'Žádný díl k přečasu — buď už strojovou verzi mají, nebo nejsou stažené.';
     return;
   }
 
   let ok = 0;
-  const skipped = [];
+  const skipped = [];   // {ep, err}
   for (let i = 0; i < targets.length; i++) {
     if (cancelled) break;
     const t = targets[i];
     if (overlay.isConnected)
-      status.textContent = `Přečasovávám ${i + 1}/${targets.length} (díl ${t.episode ?? '—'})… hotovo ${ok}, přeskočeno ${skipped.length}`;
+      status.textContent = `Přečasovávám ${i + 1}/${targets.length} (díl ${t.episode ?? '—'})… hotovo ${ok}, nepovedlo se ${skipped.length}`;
     const base = source === 'akihabara' ? `/api/akihabara/${t.sub_id}` : `/api/sub/${t.sub_id}`;
     try {
       const r = await (await fetch(`${base}/bd-resync`, { method: 'POST' })).json();
-      if (r && r.ok) ok++; else skipped.push(t.episode ?? t.sub_id);
-    } catch { skipped.push(t.episode ?? t.sub_id); }
+      if (r && r.ok) ok++;
+      else skipped.push({ ep: t.episode ?? t.sub_id, err: (r && r.error) || 'neznámá chyba' });
+    } catch (e) { skipped.push({ ep: t.episode ?? t.sub_id, err: e.message }); }
     await new Promise((r) => setTimeout(r, 400)); // pauza mezi díly (Tosho/subsync)
   }
   bdRefresh(source);
   if (overlay.isConnected) {
-    status.textContent =
-      `✔ Hotovo ${ok} · přeskočeno ${skipped.length}` +
-      (skipped.length ? ` (díly ${skipped.join(', ')} — auto nenašlo, dober ručně)` : '') +
-      (cancelled ? ' · PŘERUŠENO' : '');
+    // seskup díly podle skutečného důvodu, ať souhrn nelže
+    const byErr = new Map();
+    for (const x of skipped) {
+      if (!byErr.has(x.err)) byErr.set(x.err, []);
+      byErr.get(x.err).push(x.ep);
+    }
+    const lines = [...byErr.entries()].map(([err, eps]) => `• díly ${eps.join(', ')}: ${err}`);
+    status.innerHTML =
+      `${cancelled ? '⏹ Přerušeno' : '✔ Dokončeno'} — přečasováno ${ok} z ${targets.length}` +
+      (skipped.length ? `, nepovedlo se ${skipped.length}:<br>` + lines.map(esc).join('<br>') : '');
     overlay.querySelector('#bulk-close').textContent = 'Zavřít';
   }
 }
@@ -478,7 +488,7 @@ function openBdModal(id, source) {
   overlay.querySelector('#bd-cancel').addEventListener('click', close);
 
   overlay.querySelector('#bd-auto').addEventListener('click', async () => {
-    setBusy('Hledám BD na Toshu a přečasovávám… (může to chvíli trvat)');
+    setBusy('Hledám BD/DVD referenci (indexer → Anime Tosho) a přečasovávám… (může to chvíli trvat)');
     try {
       const r = await (await fetch(ep.auto, { method: 'POST' })).json();
       close();
