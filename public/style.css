@@ -232,3 +232,9 @@ button.del-machine:disabled { opacity: .4; cursor: default; }
 /* Upozornění, že zdroj nabízel i nepoužitou variantu (doplnit ručně přes 📤) */
 .unused-flag { margin-left: 4px; cursor: help; font-size: 14px; opacity: .85; }
 .unused-flag:hover { opacity: 1; }
+
+/* Kvalita titulku (na jaký zdroj je načasovaný) */
+.pill.q-bd  { background: rgba(120,160,255,.18); border: 1px solid #4a6cc7; color: #9ab6ff; }
+.pill.q-dvd { background: rgba(200,140,255,.15); border: 1px solid #8b5fb5; color: #c9a3e8; }
+.pill.q-web { background: rgba(120,200,160,.15); border: 1px solid #3f8a68; color: #86d5ac; }
+.edit-modal select { width: 100%; padding: 6px 8px; border-radius: 6px; }
