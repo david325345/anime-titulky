@@ -11,7 +11,9 @@ import {
   listAkihabaraAnime, akihabaraAnimeDetail, akihabaraStats, resetSubDownload,
   machineVersionsFor, getAkiSub, bulkBdTargetsHiyori, bulkBdTargetsAki,
   insertRequest, listRequests, getRequest, setRequestStatus, requestStatusForAnilist,
+  backfillQuality,
 } from './db.js';
+import { classifyQuality, releaseGroups } from './scraper/quality.js';
 import * as hanabi from './scraper/sources/hanabi.js';
 import { saveSubFile } from './scraper/download.js';
 import { bdResync, bdResyncManual } from './scraper/bdresync.js';
@@ -73,6 +75,9 @@ app.get('/api/subs', (req, res) => {
     group: r.group_name,
     release: r.release,
     version: r.version,
+    // na jaký zdroj je titulek načasovaný + video skupiny (kanonicky dle indexeru)
+    quality: r.quality || classifyQuality(r.release),
+    release_groups: releaseGroups(r.release),
     episode: r.episode,
     kind: r.kind,
     source: r.extern_domain || 'hiyori',
@@ -334,6 +339,7 @@ app.get('/api/subs-list', (req, res) => {
             sub_id: m.sub_id,
             release: m.release,
             version: m.version,
+            quality: m.quality || classifyQuality(m.release),
             file_bytes: m.file_bytes,
             downloaded_at: m.downloaded_at,
           }
@@ -558,7 +564,7 @@ app.post('/api/akihabara/:akiId/bd-resync-manual',
 app.patch('/api/sub/:subId', requireUser1, express.json(), (req, res) => {
   const subId = Number(req.params.subId);
   if (!getSub(subId)) return res.status(404).json({ ok: false, error: 'Záznam nenalezen.' });
-  const { group_name, release, lang } = req.body || {};
+  const { group_name, release, lang , quality } = req.body || {};
   // prázdný string → null (vyprázdnění pole je legitimní)
   const norm = (v) => {
     if (v == null) return null;
@@ -569,6 +575,7 @@ app.patch('/api/sub/:subId', requireUser1, express.json(), (req, res) => {
     group_name: norm(group_name),
     release: norm(release),
     lang: norm(lang),
+    quality: norm(quality), // vyplněná = ruční volba → zamkne se
   });
   res.json({ ok: n > 0 });
 });
@@ -791,6 +798,11 @@ app.use((err, req, res, next) => {
 
 app.listen(CONFIG.port, () => {
   console.log(`NimeToDex Titulky běží na portu ${CONFIG.port}`);
+  // jednorázové doplnění kvality u starších záznamů (ruční volby nechá být)
+  try {
+    const n = backfillQuality();
+    if (n) console.log(`[quality] doplněno u ${n} titulků`);
+  } catch (e) { console.error('[quality] backfill selhal:', e.message); }
   console.log(`Data dir: ${CONFIG.dataDir}`);
   if (!CONFIG.auth.user || !CONFIG.auth.pass) {
     console.log('⚠ Dashboard NENÍ chráněný (nastav AUTH_USER a AUTH_PASS).');
