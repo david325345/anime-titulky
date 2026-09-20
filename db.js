@@ -692,14 +692,20 @@ export function allSubs() {
 
 // "Dnes přidané" pro addon: stažené titulky (na R2) podle first_seen.
 // Seskupeno PO ANIME. Každé anime má episodes[] = [{episode, langs[]}], řazeno.
-export function recentlyAdded(sinceIso) {
+// Nedávno přidané titulky, seskupené po anime.
+//  sinceIso = null → bez časového omezení (všechna anime)
+//  limit    = null → bez omezení počtu anime
+// Anime jsou řazená podle času posledního přidaného titulku (nejnovější první),
+// záznamy bez first_seen jdou na konec. Bere jen stažené, co reálně leží na R2.
+export function recentlyAdded(sinceIso = null, limit = null) {
   const rows = db
     .prepare(
       "SELECT anilist_id, mal_id, anime_title, episode, lang, added_date, first_seen " +
       "FROM subs WHERE status='downloaded' AND r2_key IS NOT NULL AND r2_key<>'' " +
-      "AND first_seen >= ? ORDER BY first_seen DESC"
+      (sinceIso ? 'AND first_seen >= @since ' : '') +
+      'ORDER BY (first_seen IS NULL), first_seen DESC'
     )
-    .all(sinceIso);
+    .all(sinceIso ? { since: sinceIso } : {});
 
   // seskup podle anime (anilist|mal), uvnitř podle epizody s jazyky
   const anime = new Map();
@@ -720,13 +726,14 @@ export function recentlyAdded(sinceIso) {
   }
 
   // finalizace: episodes jako seřazené pole objektů {episode, langs}
-  return [...anime.values()].map((a) => {
+  const out = [...anime.values()].map((a) => {
     const episodes = [...a._eps.entries()]
       .map(([episode, langs]) => ({ episode, langs: [...langs].sort() }))
       .sort((x, y) => x.episode - y.episode);
     const { _eps, ...rest } = a;
     return { ...rest, episodes };
   });
+  return limit ? out.slice(0, limit) : out;
 }
 // Přehled dostupnosti pro addon. episodes = pole objektů s rozpadem variant.
 // Vrací {matchedBy, anime_title, episodes_count, subs_total, langs, episodes} — nebo total 0.
