@@ -170,19 +170,28 @@ app.post('/api/request-anime', express.json(), (req, res) => {
 // GET /api/recent[?days=N] — dnes přidané stažené titulky (na R2), seskupené.
 // Bez days = dnešní den od půlnoci. Veřejné (pro addon).
 app.get('/api/recent', (req, res) => {
-  const days = req.query.days != null && req.query.days !== ''
-    ? Math.max(1, Number(req.query.days) || 1)
-    : null;
-  let since;
-  if (days) {
+  // ?days=0 → bez časového omezení (všechna anime), ?days=N → posledních N dní,
+  // bez parametru → dnešní den od půlnoci. ?limit=N → nejvýš N anime (jinak vše).
+  const rawDays = req.query.days;
+  const hasDays = rawDays != null && rawDays !== '';
+  const nDays = hasDays ? Number(rawDays) : NaN;
+  const days = Number.isFinite(nDays) && nDays >= 0 ? Math.floor(nDays) : null;
+
+  const nLimit = Number(req.query.limit);
+  const limit = Number.isFinite(nLimit) && nLimit > 0 ? Math.floor(nLimit) : null;
+
+  let since = null;
+  if (days === 0) {
+    since = null;                                   // vše
+  } else if (days) {
     since = new Date(Date.now() - days * 86400000); // posledních N dní
   } else {
     since = new Date();
-    since.setHours(0, 0, 0, 0); // dnešní den od půlnoci (lokální čas serveru)
+    since.setHours(0, 0, 0, 0);                     // dnešek od půlnoci (lokální čas serveru)
   }
-  const sinceIso = since.toISOString();
-  const items = recentlyAdded(sinceIso);
-  res.json({ since: sinceIso, count: items.length, items });
+  const sinceIso = since ? since.toISOString() : null;
+  const items = recentlyAdded(sinceIso, limit);
+  res.json({ since: sinceIso, days, limit, count: items.length, items });
 });
 
 // GET /api/all — kompletní výpis všeho staženého na R2, seskupené po anime.
