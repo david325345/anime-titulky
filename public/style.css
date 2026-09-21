@@ -114,12 +114,12 @@ button.del {
 }
 button.del:hover { background: rgba(255,123,114,.14); border-color: #ff7b72; }
 button.del:disabled { opacity: .4; cursor: default; }
-button.del-r2, button.del-db {
+button.del-r2 {
   background: transparent; border: 1px solid #a03434; color: #ff5c5c;
   border-radius: 6px; padding: 2px 8px; cursor: pointer; font-size: 13px; line-height: 1; margin-left: 4px;
 }
-button.del-r2:hover, button.del-db:hover { background: rgba(255,60,60,.18); border-color: #ff5c5c; }
-button.del-r2:disabled, button.del-db:disabled { opacity: .4; cursor: default; }
+button.del-r2:hover { background: rgba(255,60,60,.18); border-color: #ff5c5c; }
+button.del-r2:disabled { opacity: .4; cursor: default; }
 button.reset-sub {
   background: transparent; border: 1px solid #4a6c9c; color: #8fc4ff;
   border-radius: 6px; padding: 2px 8px; cursor: pointer; font-size: 13px; line-height: 1; margin-left: 4px;
@@ -208,33 +208,46 @@ button.bd-resync { cursor: pointer; }
 .aki-bulk-bd { font-size: 12px; padding: 4px 10px; cursor: pointer; }
 .bd-modal-status { white-space: normal; }
 
-/* Požadavky na přidání anime */
-#requestsTable { width: 100%; border-collapse: collapse; }
-#requestsTable th, #requestsTable td { padding: 6px 10px; text-align: left; border-bottom: 1px solid #2a2a2a; }
-.req-actions { white-space: nowrap; text-align: right; }
-button.req-approve, button.req-reject {
-  border-radius: 6px; padding: 3px 10px; cursor: pointer; font-size: 13px; margin-left: 6px;
-  background: transparent; border: 1px solid #3a6c4a; color: #6fdc8c;
+/* ── Okno přečasu: rozložení, ruční volba ripu, seznam ripů ─────────────── */
+.bd-modal { width: 380px; transition: width .15s; }
+.bd-modal.bd-wide { width: 860px; }
+.bd-modal h3 { margin-bottom: 12px; }
+.bd-actions { display: flex; flex-direction: column; gap: 8px; }
+.bd-actions button { width: 100%; padding: 10px 12px; font-size: 14px; text-align: center; }
+.bd-actions button.btn-secondary { background: transparent; border: 1px solid var(--line); color: var(--muted); }
+.bd-close {
+  width: 100%; margin-top: 12px; padding: 8px; font-size: 13px;
+  background: transparent; border: 1px solid var(--line); color: var(--muted);
 }
-button.req-approve:hover { background: rgba(80,220,120,.15); border-color: #6fdc8c; }
-button.req-reject { border-color: #a03434; color: #ff5c5c; }
-button.req-reject:hover { background: rgba(255,60,60,.15); border-color: #ff5c5c; }
-button.req-approve:disabled, button.req-reject:disabled { opacity: .5; cursor: default; }
-
-/* Smazat jen přečas (v machine-row) — malé decentní tlačítko */
-button.del-machine {
-  background: transparent; border: 1px solid #a03434; color: #ff5c5c;
-  border-radius: 6px; padding: 1px 8px; cursor: pointer; font-size: 12px; line-height: 1.4; margin-left: 4px;
+.bd-close:hover { color: var(--text); border-color: var(--muted); }
+.bd-link { background: transparent; border: 0; padding: 0; color: var(--accent); font-size: 13px; cursor: pointer; }
+.bd-link:hover { text-decoration: underline; }
+.bd-back { margin-top: 10px; }
+.bd-pin {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  margin: 0 0 12px; padding: 8px 10px; border-radius: 8px; font-size: 13px;
+  background: rgba(76,141,255,.12); border: 1px solid rgba(76,141,255,.35); color: var(--text);
 }
-button.del-machine:hover { background: rgba(255,60,60,.18); border-color: #ff5c5c; }
-button.del-machine:disabled { opacity: .4; cursor: default; }
-
-/* Upozornění, že zdroj nabízel i nepoužitou variantu (doplnit ručně přes 📤) */
-.unused-flag { margin-left: 4px; cursor: help; font-size: 14px; opacity: .85; }
-.unused-flag:hover { opacity: 1; }
-
-/* Kvalita titulku (na jaký zdroj je načasovaný) */
-.pill.q-bd  { background: rgba(120,160,255,.18); border: 1px solid #4a6cc7; color: #9ab6ff; }
-.pill.q-dvd { background: rgba(200,140,255,.15); border: 1px solid #8b5fb5; color: #c9a3e8; }
-.pill.q-web { background: rgba(120,200,160,.15); border: 1px solid #3f8a68; color: #86d5ac; }
-.edit-modal select { width: 100%; padding: 6px 8px; border-radius: 6px; }
+.bd-pin b { word-break: break-word; }
+.bd-decide-msg {
+  margin: 0 0 12px; padding: 10px 12px; border-radius: 8px; font-size: 13px; line-height: 1.45;
+  background: rgba(255,140,90,.10); border: 1px solid rgba(255,140,90,.35); color: var(--text);
+}
+.bd-modal-status:empty { display: none; }
+.bd-list-wrap { max-height: 62vh; overflow: auto; }
+.bd-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.bd-table th { position: sticky; top: 0; background: var(--panel); text-align: left; padding: 6px; }
+.bd-table td { padding: 7px 6px; border-top: 1px solid var(--line); vertical-align: top; }
+.bd-table td.num { text-align: right; }
+.bd-table .bd-name { max-width: 340px; word-break: break-word; color: var(--text); }
+.bd-file { color: var(--muted); font-size: 11.5px; margin-top: 2px; }
+.bd-table tr.bd-off td { opacity: .42; }
+.bd-row-btns { white-space: nowrap; text-align: right; }
+.bd-row-btns button { padding: 4px 9px; font-size: 12px; margin-left: 4px; }
+.bd-row-btns button.btn-secondary { background: transparent; border: 1px solid var(--line); color: var(--muted); }
+.bd-tag { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 11px; background: var(--bg2); color: var(--muted); margin-bottom: 2px; }
+.bd-tag.good { background: #1f4d33; color: #c8f5d8; }
+.bd-tag.bad { background: #4d2323; color: #f5cccc; }
+.bd-probe td { background: rgba(0,0,0,.22); color: var(--muted); font-size: 12px; line-height: 1.5; }
+.bd-probe b.ok { color: #8fe0ad; }
+.bd-probe b.bad { color: #f29b9b; }

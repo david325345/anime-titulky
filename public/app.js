@@ -398,7 +398,9 @@ function bdReport(r) {
       (r.ref_track ? `Stopa: ${r.ref_track}\n` : '') +
       (odkud ? `Převzato z: ${odkud}\n` : '') +
       (zdroj ? `Release: ${zdroj}\n` : '') +
-      `Díl ${r.episode ?? '—'} · formát ${r.format} · ${r.elapsed_ms} ms`);
+      `Díl ${r.episode ?? '—'} · formát ${r.format} · ${r.elapsed_ms} ms` +
+      (r.via === 'manual-pick' ? '\n\n📌 Rip je uložený jako volba pro celé anime — další díly se přečasují podle něj.' : '') +
+      (r.via === 'pin' ? '\n📌 Podle ručně zvoleného ripu.' : ''));
     return true;
   }
   alert('✘ Přečas se nepovedl: ' + ((r && r.error) || 'neznámá chyba'));
@@ -410,8 +412,8 @@ async function runBulkBd(targetsUrl, source) {
   overlay.className = 'edit-modal-overlay';
   overlay.innerHTML = `
     <div class="edit-modal bd-modal">
-      <h3>Přečas celého anime (🤖 auto)</h3>
-      <p class="bd-modal-hint">Přečasuju všechny stažené díly bez strojové verze, jeden po druhém. Zavřením okno přerušíš.</p>
+      <h3>Přečas celého anime</h3>
+      <p class="bd-modal-hint" id="bulk-hint">Přečasuju všechny stažené díly bez strojové verze, jeden po druhém. Zavřením okno přerušíš.</p>
       <div class="bd-modal-status" id="bulk-status">Zjišťuji díly k přečasu…</div>
       <div class="edit-modal-actions">
         <button type="button" class="btn-secondary" id="bulk-close">Přerušit</button>
@@ -428,6 +430,13 @@ async function runBulkBd(targetsUrl, source) {
   try { data = await (await fetch(targetsUrl)).json(); }
   catch (e) { if (overlay.isConnected) status.textContent = 'Chyba: ' + e.message; return; }
   const targets = (data && data.targets) || [];
+  const bulkPin = data && data.pin;
+  if (bulkPin && overlay.isConnected) {
+    const redo = targets.filter((t) => t.redo).length;
+    overlay.querySelector('#bulk-hint').textContent =
+      `📌 Podle ručně zvoleného ripu: ${bulkPin.label || bulkPin.infohash}. Přečasuju díly bez strojové verze` +
+      (redo ? ` a ${redo} díl(ů) udělaných z jiného ripu` : '') + '. Zavřením okno přerušíš.';
+  }
   if (!targets.length) {
     if (overlay.isConnected) status.textContent = 'Žádný díl k přečasu — buď už strojovou verzi mají, nebo nejsou stažené.';
     return;
@@ -442,7 +451,9 @@ async function runBulkBd(targetsUrl, source) {
       status.textContent = `Přečasovávám ${i + 1}/${targets.length} (díl ${t.episode ?? '—'})… hotovo ${ok}, nepovedlo se ${skipped.length}`;
     const base = source === 'akihabara' ? `/api/akihabara/${t.sub_id}` : `/api/sub/${t.sub_id}`;
     try {
-      const r = await (await fetch(`${base}/bd-resync`, { method: 'POST' })).json();
+      const r = await (await fetch(`${base}/bd-resync`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+      })).json();
       if (r && r.ok) ok++;
       else skipped.push({ ep: t.episode ?? t.sub_id, err: (r && r.error) || 'neznámá chyba' });
     } catch (e) { skipped.push({ ep: t.episode ?? t.sub_id, err: e.message }); }
@@ -459,75 +470,205 @@ async function runBulkBd(targetsUrl, source) {
     const lines = [...byErr.entries()].map(([err, eps]) => `• díly ${eps.join(', ')}: ${err}`);
     status.innerHTML =
       `${cancelled ? '⏹ Přerušeno' : '✔ Dokončeno'} — přečasováno ${ok} z ${targets.length}` +
-      (skipped.length ? `, nepovedlo se ${skipped.length}:<br>` + lines.map(esc).join('<br>') : '');
+      (skipped.length ? `, nepovedlo se ${skipped.length}:<br>` + lines.map(esc).join('<br>') : '') +
+      (skipped.length && bulkPin ? '<br><br>U těchto dílů rozhodni v okně ⏱: zkusit automatiku jen pro díl, vybrat jiný rip, nahrát ručně, nebo zrušit volbu.' : '');
     overlay.querySelector('#bulk-close').textContent = 'Zavřít';
   }
 }
 
 function openBdModal(id, source) {
   const ep = bdEndpoints(id, source);
+  const base = source === 'akihabara' ? `/api/akihabara/${id}` : `/api/sub/${id}`;
   const overlay = document.createElement('div');
   overlay.className = 'edit-modal-overlay';
   overlay.innerHTML = `
     <div class="edit-modal bd-modal">
-      <h3>Přečas na BD (BD auto)</h3>
-      <p class="bd-modal-hint">Automaticky vezme časování z vložených titulků BD/DVD releasu na TorBoxu, nebo nahraj vlastní referenci (.ass/.srt).</p>
-      <div class="bd-modal-status" id="bd-status"></div>
-      <div class="edit-modal-actions">
-        <button type="button" class="btn-secondary" id="bd-cancel">Zavřít</button>
-        <button type="button" id="bd-manual">Nahrát ručně</button>
-        <button type="button" id="bd-bulk">Celé anime (auto)</button>
-        <button type="button" id="bd-auto">Automaticky</button>
+      <h3>Přečas na BD</h3>
+      <div class="bd-pin" id="bd-pin" style="display:none">
+        <span>📌 Přečasovávám podle: <b id="bd-pin-label"></b></span>
+        <button type="button" class="bd-link" id="bd-unpin">Zrušit</button>
       </div>
-      <input type="file" id="bd-file" accept=".ass,.srt,.ssa,.xz" hidden />
+
+      <div id="bd-main">
+        <p class="bd-modal-hint" id="bd-hint">Časování se vezme z vložených titulků BD/DVD releasu na TorBoxu. Rip můžeš vybrat sám, nebo ho nechat vybrat automaticky.</p>
+        <div class="bd-actions">
+          <button type="button" id="bd-pick">Vybrat rip…</button>
+          <button type="button" id="bd-auto">Automaticky</button>
+          <button type="button" id="bd-bulk">Celé anime (auto)</button>
+          <button type="button" id="bd-manual">Nahrát ručně…</button>
+        </div>
+      </div>
+
+      <div id="bd-decide" style="display:none">
+        <div class="bd-decide-msg" id="bd-decide-msg"></div>
+        <div class="bd-actions">
+          <button type="button" id="bd-once">Zkusit automaticky (jen tenhle díl)</button>
+          <button type="button" id="bd-pick2">Vybrat jiný rip…</button>
+          <button type="button" id="bd-manual2">Nahrát ručně…</button>
+          <button type="button" class="btn-secondary" id="bd-unpin2">Zrušit ruční volbu</button>
+        </div>
+      </div>
+
+      <div id="bd-list" style="display:none">
+        <div class="bd-list-wrap" id="bd-list-body"></div>
+        <button type="button" class="bd-link bd-back" id="bd-back">← Zpět</button>
+      </div>
+
+      <div class="bd-modal-status" id="bd-status"></div>
+      <button type="button" class="bd-close" id="bd-cancel">Zavřít</button>
+      <input type="file" id="bd-file" accept=".ass,.srt,.ssa,.xz" style="display:none" />
     </div>`;
   document.body.appendChild(overlay);
+  const $o = (sel) => overlay.querySelector(sel);
+  const modal = $o('.bd-modal');
+  const status = $o('#bd-status');
+  let pin = null;
 
   const close = () => overlay.remove();
-  const status = overlay.querySelector('#bd-status');
-  const setBusy = (msg) => {
-    status.textContent = msg;
-    overlay.querySelectorAll('button').forEach((b) => (b.disabled = true));
+  const say = (msg) => { status.textContent = msg || ''; };
+  const busy = (on, msg) => {
+    if (msg !== undefined) say(msg);
+    overlay.querySelectorAll('button').forEach((b) => { if (b.id !== 'bd-cancel') b.disabled = on; });
   };
-  overlay.addEventListener('click', (ev) => { if (ev.target === overlay) close(); });
-  overlay.querySelector('#bd-cancel').addEventListener('click', close);
+  const show = (view) => {
+    for (const v of ['bd-main', 'bd-decide', 'bd-list']) $o('#' + v).style.display = v === view ? '' : 'none';
+    modal.classList.toggle('bd-wide', view === 'bd-list');
+  };
+  const renderPin = () => {
+    $o('#bd-pin').style.display = pin ? '' : 'none';
+    $o('#bd-pin-label').textContent = pin ? (pin.label || pin.infohash) : '';
+    $o('#bd-hint').textContent = pin
+      ? 'Je zvolený rip — „Automaticky" i „Celé anime" použijí jen ten. Když u některého dílu nepůjde, ukážu proč a rozhodneš sám.'
+      : 'Časování se vezme z vložených titulků BD/DVD releasu na TorBoxu. Rip můžeš vybrat sám, nebo ho nechat vybrat automaticky.';
+  };
+  const post = async (url, body) => (await fetch(url, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}),
+  })).json();
+  const finish = (r) => {
+    if (r && r.ok) { close(); bdReport(r); bdRefresh(source); return; }
+    if (r && r.stage === 'pin') {                      // ruční volba u dílu nešla → rozhodne uživatel
+      $o('#bd-decide-msg').textContent = r.error;
+      show('bd-decide'); busy(false, '');
+      return;
+    }
+    close(); bdReport(r);
+  };
 
-  overlay.querySelector('#bd-auto').addEventListener('click', async () => {
-    setBusy('Hledám BD/DVD referenci (indexer → TorBox) a přečasovávám… (může to chvíli trvat)');
-    try {
-      const r = await (await fetch(ep.auto, { method: 'POST' })).json();
-      close();
-      if (bdReport(r)) bdRefresh(source);
-    } catch (err) { close(); alert('Chyba: ' + err.message); }
+  overlay.addEventListener('click', (ev) => { if (ev.target === overlay) close(); });
+  $o('#bd-cancel').addEventListener('click', close);
+  fetch(`${base}/bd-pin`).then((x) => x.json()).then((d) => { pin = (d && d.pin) || null; renderPin(); }).catch(() => {});
+
+  const unpin = async () => {
+    busy(true, 'Ruším ruční volbu…');
+    try { await fetch(`${base}/bd-pin`, { method: 'DELETE' }); pin = null; renderPin(); show('bd-main'); busy(false, 'Ruční volba zrušena — dál rozhoduje automatika.'); }
+    catch (e) { busy(false, 'Chyba: ' + e.message); }
+  };
+  $o('#bd-unpin').addEventListener('click', unpin);
+  $o('#bd-unpin2').addEventListener('click', unpin);
+
+  $o('#bd-auto').addEventListener('click', async () => {
+    busy(true, pin ? 'Přečasovávám podle zvoleného ripu…' : 'Hledám BD/DVD referenci (indexer → TorBox) a přečasovávám… (může to chvíli trvat)');
+    try { finish(await post(ep.auto, {})); } catch (err) { close(); alert('Chyba: ' + err.message); }
+  });
+  $o('#bd-once').addEventListener('click', async () => {
+    busy(true, 'Zkouším automatiku jen pro tenhle díl (ruční volba zůstává)…');
+    try { finish(await post(ep.auto, { ignorePin: true })); } catch (err) { close(); alert('Chyba: ' + err.message); }
   });
 
-  overlay.querySelector('#bd-bulk').addEventListener('click', () => {
-    const targetsUrl = source === 'akihabara'
-      ? `/api/akihabara/${id}/bulk-bd-targets`
-      : `/api/sub/${id}/bulk-bd-targets`;
+  $o('#bd-bulk').addEventListener('click', () => {
+    const targetsUrl = source === 'akihabara' ? `/api/akihabara/${id}/bulk-bd-targets` : `/api/sub/${id}/bulk-bd-targets`;
     close();
     runBulkBd(targetsUrl, source);
   });
 
-  overlay.querySelector('#bd-manual').addEventListener('click', () => {
-    overlay.querySelector('#bd-file').click();
-  });
-  overlay.querySelector('#bd-file').addEventListener('change', async (ev) => {
+  const pickFile = () => $o('#bd-file').click();
+  $o('#bd-manual').addEventListener('click', pickFile);
+  $o('#bd-manual2').addEventListener('click', pickFile);
+  $o('#bd-file').addEventListener('change', async (ev) => {
     const file = ev.target.files[0];
     if (!file) return;
-    setBusy('Přečasovávám podle nahrané reference…');
+    busy(true, 'Přečasovávám podle nahrané reference…');
     try {
       const buf = await file.arrayBuffer();
-      const url = `${ep.manual}?filename=${encodeURIComponent(file.name)}`;
-      const r = await (await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/octet-stream' },
-        body: buf,
+      const r = await (await fetch(`${ep.manual}?filename=${encodeURIComponent(file.name)}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: buf,
       })).json();
       close();
       if (bdReport(r)) bdRefresh(source);
     } catch (err) { close(); alert('Chyba: ' + err.message); }
   });
+
+  // ── Vybrat rip ──
+  const openList = async () => {
+    show('bd-list');
+    const body = $o('#bd-list-body');
+    body.innerHTML = '';
+    busy(true, 'Načítám releasy z indexeru (čeká na aktuální seedy, ~5 s)…');
+    let d;
+    try { d = await (await fetch(`${base}/bd-candidates`)).json(); }
+    catch (e) { busy(false, 'Chyba: ' + e.message); return; }
+    busy(false, '');
+    if (!d.ok) { say(d.error || 'Nepodařilo se načíst releasy.'); return; }
+    if (d.pin) { pin = d.pin; renderPin(); }
+    if (!d.candidates.length) {
+      const st = d.stats || {};
+      say(`Indexer pro díl ${d.episode} nemá žádný použitelný BD/DVD release` +
+        (st.raw ? ` (releasů ${st.raw}: WEB ${st.webDropped || 0}, bez určeného zdroje ${st.noSource || 0}).` : '.'));
+      return;
+    }
+    const rows = d.candidates.map((c, i) => `
+      <tr class="${c.cached ? '' : 'bd-off'}" data-i="${i}">
+        <td>${c.pinned ? '📌' : ''}</td>
+        <td><b>${esc(c.group || '—')}</b></td>
+        <td class="bd-name" title="${esc(c.name)}">${esc(c.name)}<div class="bd-file">díl: ${esc(c.file || '?')}</div></td>
+        <td>${c.kind === '🤖 DVD' ? 'DVD' : c.remux ? 'BD Remux' : 'BD'}</td>
+        <td class="num">${c.seeders}</td>
+        <td>${c.cached ? '<span class="bd-tag good">v cache</span>' : '<span class="bd-tag">není v cache</span>'}
+            ${c.known ? `<div><span class="bd-tag ${/nepoužitelný/.test(c.known) ? 'bad' : 'good'}">${esc(c.known)}</span></div>` : ''}</td>
+        <td class="bd-row-btns">
+          <button type="button" class="btn-secondary" data-act="probe" ${c.cached ? '' : 'disabled'}>Zjistit stopy</button>
+          <button type="button" data-act="use" ${c.cached ? '' : 'disabled'}>Použít</button>
+        </td>
+      </tr>
+      <tr class="bd-probe" data-probe="${i}" style="display:none"><td></td><td colspan="6"></td></tr>`).join('');
+    body.innerHTML = `
+      <p class="bd-modal-hint">Díl ${d.episode} — releasy seřazené jako u automatiky (BD před DVD, remux na konec, pak seedy). „Použít" přečasuje tenhle díl a rip uloží pro celé anime.</p>
+      <table class="bd-table"><thead><tr><th></th><th>Skupina</th><th>Release</th><th>Zdroj</th><th>Seedy</th><th>Stav</th><th></th></tr></thead>
+      <tbody>${rows}</tbody></table>`;
+    // „není v cache" tlačítka nechej zakázaná i po busy(false)
+    const lockOff = () => body.querySelectorAll('tr.bd-off button').forEach((b) => (b.disabled = true));
+    lockOff();
+
+    body.onclick = async (ev) => {
+      const btn = ev.target.closest('button[data-act]');
+      if (!btn) return;
+      const i = Number(btn.closest('tr').dataset.i), c = d.candidates[i];
+      if (btn.dataset.act === 'probe') {
+        const pr = body.querySelector(`tr[data-probe="${i}"]`), cell = pr.lastElementChild;
+        pr.style.display = ''; cell.textContent = 'Zjišťuji stopy (TorBox + index souboru)…';
+        busy(true); 
+        try {
+          const p = await post(`${base}/bd-probe`, { infohash: c.infohash });
+          const tr = (p.tracks || []).map((t) => `${esc(t.codec.replace('S_TEXT/', '').replace('S_HDMV/', ''))} ${esc(t.lang || '?')} „${esc(t.name || '')}" — ${t.events} událostí`).join('<br>');
+          cell.innerHTML = (p.file ? `Soubor: ${esc(p.file)}${p.kb ? ` (${p.kb} kB přečteno)` : ''}<br>` : '') +
+            (tr ? `${tr}<br>` : '') +
+            (p.ok ? `<b class="ok">→ použila by se: ${esc(p.pick)}</b>` : `<b class="bad">✘ ${esc(p.error || 'nepoužitelné')}</b>`);
+        } catch (e) { cell.textContent = 'Chyba: ' + e.message; }
+        busy(false); lockOff();
+      } else {
+        busy(true, `Přečasovávám díl ${d.episode} na „${c.group || c.name}"…`);
+        try {
+          const r = await post(ep.auto, { infohash: c.infohash });
+          if (r.ok) { close(); bdReport(r); bdRefresh(source); return; }
+          busy(false, '✘ ' + (r.error || 'Přečas se nepovedl.') + ' — rip se neuložil jako volba.');
+          lockOff();
+        } catch (e) { busy(false, 'Chyba: ' + e.message); lockOff(); }
+      }
+    };
+  };
+  $o('#bd-pick').addEventListener('click', openList);
+  $o('#bd-pick2').addEventListener('click', openList);
+  $o('#bd-back').addEventListener('click', () => { show('bd-main'); say(''); });
 }
 
 $('#subsTable').addEventListener('click', async (e) => {
