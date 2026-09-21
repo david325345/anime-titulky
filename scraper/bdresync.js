@@ -519,7 +519,7 @@ const REASON_TXT = {
   'no-files': 'TorBox nevrátil seznam souborů',
   'no-hash': 'release nemá infohash',
   'no-cues': 'soubor nemá index titulků (Cues)',
-  'only-bitmap': 'má jen bitmapové titulky (PGS)',
+  'only-bitmap': 'bitmapové titulky nejdou použít (VobSub nebo příliš málo událostí)',
   'only-signs': 'má jen Signs & Songs',
   'no-text-track': 'nemá textové titulky',
   'no-cues-for-subs': 'titulky nejsou v indexu (Cues)',
@@ -541,7 +541,7 @@ async function probeRelease(sub, rel) {
     const tl = await readTimeline(L.url, { refresh: L.refresh });
     const tracks = tl.tracks.map((t) => ({ num: t.num, codec: t.codec, lang: t.lang, name: t.name, events: t.cues.length }));
     if (tl.noCues) return { ok: false, reason: 'no-cues', msg: REASON_TXT['no-cues'], file: L.file, tracks };
-    const pk = pickDialogueTrack(tl.tracks);
+    const pk = pickDialogueTrack(tl.tracks, tl.scale);
     if (!pk.track) {
       memoSet(sub.anilist_id, rel.at_id, { bad: true });
       return { ok: false, reason: pk.reason, msg: REASON_TXT[pk.reason] || pk.reason, file: L.file, tracks };
@@ -559,7 +559,7 @@ export async function bdCandidates(sub) {
   const list = await releasesFor(sub, true);
   const cached = list.length ? await cachedHashes(list.map((r) => r.infohash)) : new Set();
   const pin = sub.anilist_id ? getBdPin(sub.anilist_id) : null;
-  const TIER = { 1: 'anglická ASS', 2: 'ASS jiného jazyka', 3: 'anglická SRT', 4: 'jiná stopa' };
+  const TIER = { 1: 'anglická ASS', 2: 'ASS jiného jazyka', 3: 'anglická SRT', 4: 'jiná stopa', 5: 'PGS (bitmapová)' };
   return {
     ok: true, episode: sub.episode, stats: list.stats || {},
     pin: pin ? { infohash: pin.infohash, label: pin.label } : null,
@@ -702,7 +702,7 @@ export async function bdResync(sub, source = 'hiyori', opts = {}) {
       try {
         const tl = await readTimeline(L.url, { refresh: L.refresh });
         if (tl.noCues) { why.noCues++; return null; }
-        const pk = pickDialogueTrack(tl.tracks);
+        const pk = pickDialogueTrack(tl.tracks, tl.scale);
         if (!pk.track) {
           if (pk.reason === 'only-bitmap') why.onlyBitmap++;
           else if (pk.reason === 'only-signs') why.onlySigns++;
@@ -749,7 +749,9 @@ export async function bdResync(sub, source = 'hiyori', opts = {}) {
         if (p) { probes.push(p); if (p.pk.tier === 1) break; }
       }
       // 2) pořadí pokusů: anglická ASS, jinak release s nejvíc seedy (probes jsou v pořadí seedů)
-      const order = [...probes].sort((a, b) => (a.pk.tier === 1 ? 0 : 1) - (b.pk.tier === 1 ? 0 : 1));
+      // pořadí: anglická ASS → ostatní textové (dle seedů) → PGS až úplně nakonec
+      const rankP = (p) => (p.pk.tier === 1 ? 0 : p.pk.tier === 5 ? 2 : 1);
+      const order = [...probes].sort((a, b) => rankP(a) - rankP(b));
       for (const p of order) {
         if (tried >= 8) break;
         const r = await attempt(p, probes.length);
@@ -808,8 +810,8 @@ export async function bdResync(sub, source = 'hiyori', opts = {}) {
   if (why.zip) parts.push(`${why.zip}× TorBox drží release jako .zip (nejde číst po částech)`);
   if (why.noFile) parts.push(`${why.noFile}× soubor dílu (podle indexeru) se v releasu nenašel`);
   if (why.noCues) parts.push(`${why.noCues}× soubor nemá index titulků (Cues)`);
-  if (why.onlyBitmap) parts.push(`${why.onlyBitmap}× jen bitmapové titulky (PGS)`);
-  if (why.onlySigns) parts.push(`${why.onlySigns}× jen Signs & Songs`);
+  if (why.onlyBitmap) parts.push(`${why.onlyBitmap}× bitmapové titulky nejdou použít (VobSub nebo příliš málo událostí)`);
+  if (why.onlySigns) parts.push(`${why.onlySigns}× jen Signs & Songs, bez dialogu`);
   if (why.noTracks) parts.push(`${why.noTracks}× soubor nemá textové titulky`);
   if (why.notProcessed) parts.push(`${why.notProcessed}× Anime Tosho release nezpracovalo`);
   if (why.noHash) parts.push(`${why.noHash}× release nemá infohash`);

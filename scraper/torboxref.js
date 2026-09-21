@@ -360,17 +360,53 @@ const NOT_DIALOG = /sign|song|karaoke|forced|lyrics|\bop\b|\bed\b/i;
 const isAss = (t) => /ASS|SSA/i.test(t.codec || '');
 const isEn = (t) => /^en/i.test(t.lang || '');
 const tierOf = (t) => (isEn(t) && isAss(t) ? 1 : isAss(t) ? 2 : isEn(t) ? 3 : 4);
-const TIER_TXT = { 1: 'anglická ASS', 2: 'ASS jiného jazyka', 3: 'anglická SRT', 4: 'jiná stopa' };
+const TIER_TXT = { 1: 'anglická ASS', 2: 'ASS jiného jazyka', 3: 'anglická SRT', 4: 'jiná stopa', 5: 'PGS (bitmapová)' };
 
 /** @returns {{track:object, tier:number, why:string}|{track:null, reason:string}} */
-export function pickDialogueTrack(tracks) {
-  const text = tracks.filter((t) => TEXT_CODEC.test(t.codec || ''));
-  if (!text.length) {
-    const bitmap = tracks.some((t) => /PGS|VOBSUB|HDMV/i.test(t.codec || ''));
-    return { track: null, reason: bitmap ? 'only-bitmap' : 'no-text-track' };
+// PGS (bitmapové titulky) jako ZÁLOHA, když release nemá žádnou textovou
+// dialogovou stopu. Text nepotřebujeme — alass pracuje jen s časy a ty má PGS
+// v indexu Cues také. Události jsou střídavě „zobraz" a „smaž" → po dvojicích.
+// Ověřeno 21.9. (Isekai wa Smartphone E1): PGS z [kmplx] proti anglické ASS
+// ze stejného souboru → alass stejný posun −3,7 s, medián 40 ms, 100 % do 100 ms.
+const BITMAP_CODEC = /PGS|HDMV/i;
+function pgsPairs(track, scale) {
+  const ev = track.cues.map((c) => c.t).sort((a, b) => a - b);
+  const toMs = (u) => (u * scale) / 1e6;
+  const out = [];
+  for (let i = 0; i + 1 < ev.length; i += 2) {
+    const len = toMs(ev[i + 1] - ev[i]);
+    if (len >= 300 && len <= 15000) out.push({ t: ev[i], d: ev[i + 1] - ev[i] });
   }
+  return out;
+}
+
+/** @returns {{track:object, tier:number, why:string, pgs?:boolean}|{track:null, reason:string}} */
+export function pickDialogueTrack(tracks, scale = 1_000_000) {
+  const text = tracks.filter((t) => TEXT_CODEC.test(t.codec || ''));
   let cand = text.filter((t) => !NOT_DIALOG.test(t.name || '') && t.cues.length >= 20); // i krátké specialy
+
   if (!cand.length) {
+    // žádný textový dialog → zkus PGS (úroveň 5, nejnižší)
+    const pgs = tracks
+      .filter((t) => BITMAP_CODEC.test(t.codec || '') && !NOT_DIALOG.test(t.name || '') && t.cues.length >= 40)
+      .map((t) => ({ t, pairs: pgsPairs(t, scale) }))
+      .filter((x) => x.pairs.length >= 20)
+      .sort((x, y) =>
+        (isEn(y.t) ? 1 : 0) - (isEn(x.t) ? 1 : 0) ||
+        (/(full|dialog)/i.test(y.t.name || '') ? 1 : 0) - (/(full|dialog)/i.test(x.t.name || '') ? 1 : 0) ||
+        y.pairs.length - x.pairs.length);
+    if (pgs.length) {
+      const x = pgs[0];
+      return {
+        track: { ...x.t, cues: x.pairs }, tier: 5, pgs: true,
+        why: `${TIER_TXT[5]}${x.t.name ? ` „${x.t.name}"` : ''} (${x.t.lang || '?'}, ${x.pairs.length} titulků)`,
+      };
+    }
+    if (!text.length) {
+      const bm = tracks.filter((t) => /PGS|VOBSUB|HDMV/i.test(t.codec || ''));
+      if (bm.length && bm.every((t) => NOT_DIALOG.test(t.name || ''))) return { track: null, reason: 'only-signs' };
+      return { track: null, reason: bm.length ? 'only-bitmap' : 'no-text-track' };   // VobSub / PGS s příliš málo událostmi
+    }
     const hasCues = text.some((t) => t.cues.length);
     return { track: null, reason: hasCues ? 'only-signs' : 'no-cues-for-subs' };
   }
