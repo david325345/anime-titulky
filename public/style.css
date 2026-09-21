@@ -251,3 +251,9 @@ button.bd-resync { cursor: pointer; }
 .bd-probe td { background: rgba(0,0,0,.22); color: var(--muted); font-size: 12px; line-height: 1.5; }
 .bd-probe b.ok { color: #8fe0ad; }
 .bd-probe b.bad { color: #f29b9b; }
+
+/* Kvalita titulku (na jaký zdroj je načasovaný) */
+.pill.q-bd  { background: rgba(120,160,255,.18); border: 1px solid #4a6cc7; color: #9ab6ff; }
+.pill.q-dvd { background: rgba(200,140,255,.15); border: 1px solid #8b5fb5; color: #c9a3e8; }
+.pill.q-web { background: rgba(120,200,160,.15); border: 1px solid #3f8a68; color: #86d5ac; }
+.edit-modal select { width: 100%; padding: 6px 8px; border-radius: 6px; }
