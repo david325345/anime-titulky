@@ -27,14 +27,6 @@ function dur(a, b) {
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
 }
 
-// Kvalita titulku (na jaký zdroj je načasovaný). 🔒 = ručně nastavená (automat ji nepřepíše).
-function qualityCell(s) {
-  if (!s.quality) return '<span class="muted">—</span>';
-  const cls = s.quality === 'BD' ? 'q-bd' : s.quality === 'DVD' ? 'q-dvd' : 'q-web';
-  const lock = s.quality_locked ? ' 🔒' : '';
-  return `<span class="pill ${cls}" title="${s.quality_locked ? 'Nastaveno ručně' : 'Určeno automaticky z release'}">${esc(s.quality)}${lock}</span>`;
-}
-
 function statusCell(sub) {
   const label = { downloaded: 'staženo', new: 'čeká', not_downloaded: 'evidováno', pending_extern: 'extern (čeká na parser)', failed: 'chyba' }[sub.status] || sub.status;
   const t = sub.error ? ` title="${esc(sub.error)}"` : '';
@@ -95,12 +87,11 @@ function renderSubs(subs) {
       <td class="group">${esc(s.group_name || '')}</td>
       <td class="release">${esc(s.release || '')}</td>
       <td class="nowrap">${src}</td>
-      <td class="nowrap">${qualityCell(s)}</td>
       <td class="nowrap">${statusCell(s)}</td>
       <td class="nowrap">${onR2}</td>
       <td class="nowrap">${dl}</td>
-      <td class="nowrap">${(s.status === 'downloaded' && s.r2_key) ? `<button class="bd-resync" data-id="${s.sub_id}" data-source="hiyori" title="Přečasovat na BD časování (BD auto)">⏱</button>` : ''}${s.machine ? `<button class="machine-toggle" data-id="${s.sub_id}" title="Zobrazit strojovou verzi (BD auto)">přečas ▸</button>` : ''}${dlNowBtn}${uploadBtn}${canDelete ? `<button class="edit-sub" data-id="${s.sub_id}" data-group="${esc(s.group_name || '')}" data-release="${esc(s.release || '')}" data-lang="${esc(s.lang || '')}" data-quality="${esc(s.quality || '')}" title="Upravit fansub / release / jazyk / kvalitu">✏️</button>` : ''}${(canDelete && s.r2_key) ? `<button class="del-r2" data-id="${s.sub_id}" title="Smazat úplně (DB i soubor na R2)">🗑</button>` : ''}${(canDelete && !s.r2_key) ? `<button class="del-db" data-id="${s.sub_id}" title="Smazat z evidence (jen DB — žádný soubor na R2)">🗑</button>` : ''}${(canDelete && s.status === 'downloaded') ? `<button class="reset-sub" data-id="${s.sub_id}" title="Smazat soubor z R2 a vrátit mezi nestažené (pak jde nahrát správný přes 📤)">♻</button>` : ''}${s.unused_variants ? `<span class="unused-flag" title="Zdroj nabízel i další verzi, která se nepoužila: ${esc(s.unused_variants)} — můžeš ji doplnit ručně přes 📤">⚠️</span>` : ''}</td>
-    </tr>${s.machine ? `<tr class="machine-row" data-for="${s.sub_id}" hidden><td></td><td colspan="10" class="machine-cell"><span class="pill machine-pill">${esc(s.machine.release || '🤖 BD')}</span>${s.machine.quality ? ` <span class="pill ${s.machine.quality === 'BD' ? 'q-bd' : s.machine.quality === 'DVD' ? 'q-dvd' : 'q-web'}">${esc(s.machine.quality)}</span>` : ''} ${s.machine.version ? esc(s.machine.version) + ' · ' : ''}${((s.machine.file_bytes || 0) / 1024).toFixed(1)} KB · <a href="/api/file/${s.machine.sub_id}">stáhnout</a>${canDelete ? ` · <button class="del-machine" data-id="${s.machine.sub_id}" title="Smazat jen tento přečas (původní titulek zůstane)">🗑 smazat přečas</button>` : ''}</td></tr>` : ''}`;
+      <td class="nowrap">${(s.status === 'downloaded' && s.r2_key) ? `<button class="bd-resync" data-id="${s.sub_id}" data-source="hiyori" title="Přečasovat na BD časování (BD auto)">⏱</button>` : ''}${s.machine ? `<button class="machine-toggle" data-id="${s.sub_id}" title="Zobrazit strojovou verzi (BD auto)">přečas ▸</button>` : ''}${dlNowBtn}${uploadBtn}${canDelete ? `<button class="edit-sub" data-id="${s.sub_id}" data-group="${esc(s.group_name || '')}" data-release="${esc(s.release || '')}" data-lang="${esc(s.lang || '')}" title="Upravit fansub / release / jazyk">✏️</button>` : ''}${(canDelete && s.r2_key) ? `<button class="del-r2" data-id="${s.sub_id}" title="Smazat úplně (DB i soubor na R2)">🗑</button>` : ''}${(canDelete && !s.r2_key) ? `<button class="del-db" data-id="${s.sub_id}" title="Smazat z evidence (jen DB — žádný soubor na R2)">🗑</button>` : ''}${(canDelete && s.status === 'downloaded') ? `<button class="reset-sub" data-id="${s.sub_id}" title="Smazat soubor z R2 a vrátit mezi nestažené (pak jde nahrát správný přes 📤)">♻</button>` : ''}${s.unused_variants ? `<span class="unused-flag" title="Zdroj nabízel i další verzi, která se nepoužila: ${esc(s.unused_variants)} — můžeš ji doplnit ručně přes 📤">⚠️</span>` : ''}</td>
+    </tr>${s.machine ? `<tr class="machine-row" data-for="${s.sub_id}" hidden><td></td><td colspan="10" class="machine-cell"><span class="pill machine-pill">${esc(s.machine.release || '🤖 BD')}</span> ${s.machine.version ? esc(s.machine.version) + ' · ' : ''}${((s.machine.file_bytes || 0) / 1024).toFixed(1)} KB · <a href="/api/file/${s.machine.sub_id}">stáhnout</a>${canDelete ? ` · <button class="del-machine" data-id="${s.machine.sub_id}" title="Smazat jen tento přečas (původní titulek zůstane)">🗑 smazat přečas</button>` : ''}</td></tr>` : ''}`;
   }).join('') || `<tr><td colspan="11" class="muted">Nic nenalezeno.</td></tr>`;
 }
 
@@ -348,13 +339,6 @@ function openEditModal(ed) {
       <label>Jazyk
         <input type="text" id="edit-lang" value="${esc(ed.dataset.lang || '')}" placeholder="CZ / SK" maxlength="4" />
       </label>
-      <label>Kvalita
-        <select id="edit-quality">
-          <option value="">— automaticky z release —</option>
-          ${['BD', 'DVD', 'WEB-DL'].map((q) =>
-            `<option value="${q}"${(ed.dataset.quality || '') === q ? ' selected' : ''}>${q}</option>`).join('')}
-        </select>
-      </label>
       <div class="edit-modal-actions">
         <button type="button" class="btn-secondary" id="edit-cancel">Zrušit</button>
         <button type="button" id="edit-save">Uložit</button>
@@ -379,7 +363,6 @@ function openEditModal(ed) {
           group_name: document.getElementById('edit-group').value.trim(),
           release: document.getElementById('edit-release').value.trim(),
           lang: document.getElementById('edit-lang').value.trim().toUpperCase(),
-          quality: document.getElementById('edit-quality').value,
         }),
       })).json();
       if (r.ok) { close(); loadSubs(); }
@@ -407,9 +390,14 @@ function bdReport(r) {
   if (r && r.ok) {
     const zdroj = [r.group || null, r.seeders != null ? `${r.seeders} seedů` : null]
       .filter(Boolean).join(' · ');
+    const odkud = r.ref_source === 'torbox'
+      ? `vložené titulky z BD souboru (TorBox${r.ref_kb ? `, ${r.ref_kb} kB` : ''})`
+      : r.ref_source === 'tosho' ? 'Anime Tosho' : null;
     alert('✔ Přečas hotový (' + (r.kind || '🤖 BD') + ')\n' +
       (r.release ? `Reference: ${r.release}\n` : '') +
-      (zdroj ? `Zdroj: ${zdroj}\n` : '') +
+      (r.ref_track ? `Stopa: ${r.ref_track}\n` : '') +
+      (odkud ? `Převzato z: ${odkud}\n` : '') +
+      (zdroj ? `Release: ${zdroj}\n` : '') +
       `Díl ${r.episode ?? '—'} · formát ${r.format} · ${r.elapsed_ms} ms`);
     return true;
   }
@@ -483,13 +471,13 @@ function openBdModal(id, source) {
   overlay.innerHTML = `
     <div class="edit-modal bd-modal">
       <h3>Přečas na BD (BD auto)</h3>
-      <p class="bd-modal-hint">Automaticky najde referenci na Anime Tosho (BD, jinak DVD), nebo nahraj vlastní referenci (.ass/.srt).</p>
+      <p class="bd-modal-hint">Automaticky vezme časování z vložených titulků BD/DVD releasu na TorBoxu, nebo nahraj vlastní referenci (.ass/.srt).</p>
       <div class="bd-modal-status" id="bd-status"></div>
       <div class="edit-modal-actions">
         <button type="button" class="btn-secondary" id="bd-cancel">Zavřít</button>
         <button type="button" id="bd-manual">Nahrát ručně</button>
         <button type="button" id="bd-bulk">Celé anime (auto)</button>
-        <button type="button" id="bd-auto">Automaticky (Tosho)</button>
+        <button type="button" id="bd-auto">Automaticky</button>
       </div>
       <input type="file" id="bd-file" accept=".ass,.srt,.ssa,.xz" hidden />
     </div>`;
@@ -505,7 +493,7 @@ function openBdModal(id, source) {
   overlay.querySelector('#bd-cancel').addEventListener('click', close);
 
   overlay.querySelector('#bd-auto').addEventListener('click', async () => {
-    setBusy('Hledám BD/DVD referenci (indexer → Anime Tosho) a přečasovávám… (může to chvíli trvat)');
+    setBusy('Hledám BD/DVD referenci (indexer → TorBox) a přečasovávám… (může to chvíli trvat)');
     try {
       const r = await (await fetch(ep.auto, { method: 'POST' })).json();
       close();
