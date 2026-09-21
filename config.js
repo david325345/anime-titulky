@@ -133,6 +133,8 @@ export const CONFIG = {
   // přes HTTP range, řádově stovky kB). Bez klíče je tahle větev vypnutá.
   torbox: {
     key: process.env.TORBOX_API_KEY || '',
+    // kolik cached BD releasů prohledat při hledání anglické ASS stopy
+    probeMax: Math.max(1, Number(process.env.BD_PROBE_MAX) || 6),
     api: (process.env.TORBOX_API || 'https://api.torbox.app/v1/api').replace(/\/+$/, ''),
   },
 
