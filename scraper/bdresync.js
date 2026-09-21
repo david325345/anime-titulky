@@ -14,7 +14,7 @@ import https from 'node:https';
 import zlib from 'node:zlib';
 import { CONFIG } from '../config.js';
 import { r2Enabled, r2Put, r2Get, r2PublicUrl } from '../r2.js';
-import { saveMachineSub, machineIdFor, getBdPref, setBdPref } from '../db.js';
+import { saveMachineSub, machineIdFor, getBdPref, setBdPref, getBdPin, setBdPin } from '../db.js';
 import { cachedHashes, episodeLink, readTimeline, pickDialogueTrack, timelineToSrt } from './torboxref.js';
 
 // ── Indexer (self-signed cert → jen na tenhle host vypneme verifikaci) ──────
@@ -419,7 +419,7 @@ function baseNameOf(sub) {
     .replace(/^\d+__/, ''); // odsekni prefix ID z původního jména
 }
 
-async function saveMachine(sub, outputText, releaseTitle, source, kind = '🤖 BD', refGroup = null) {
+async function saveMachine(sub, outputText, releaseTitle, source, kind = '🤖 BD', refGroup = null, refHash = null) {
   if (!r2Enabled()) throw new Error('R2 není nastaveno — strojovou verzi není kam uložit.');
   const machineId = machineIdFor(sub.sub_id, source);
   const outBuf = Buffer.from(outputText, 'utf8');
@@ -451,6 +451,7 @@ async function saveMachine(sub, outputText, releaseTitle, source, kind = '🤖 B
     r2_key,
     machine_of: sub.sub_id,
     machine_source: source,
+    machine_ref: refHash ? String(refHash).toLowerCase() : null,   // ze kterého releasu je časování
   });
   return { machineId, r2_key, r2_url: r2PublicUrl(r2_key), bytes: outBuf.length };
 }
@@ -495,7 +496,131 @@ const MEMO_TTL = 6 * 3600e3;
 const memoGet = (al, at) => { const m = releaseMemo.get(`${al}:${at}`); return m && Date.now() - m.t < MEMO_TTL ? m : null; };
 const memoSet = (al, at, v) => { if (al) releaseMemo.set(`${al}:${at}`, { ...v, t: Date.now() }); };
 
-export async function bdResync(sub, source = 'hiyori') {
+
+// ── RUČNÍ VOLBA RIPU ────────────────────────────────────────────────────────
+// Kandidáti pro okno „Vybrat rip" + přečas přesně na zvolený release. Ruční
+// volba VŽDY vede: žádná automatika ani záloha — když rip nejde, vrátí se
+// pravdivá hláška a rozhodne uživatel.
+const relCache = new Map();   // `${id}:${ep}` → { list, t } — ať okno nečeká 3 s na každé kliknutí
+async function releasesFor(sub, fresh = false) {
+  const k = `${sub.anilist_id || 'm' + sub.mal_id}:${sub.episode}`;
+  const c = relCache.get(k);
+  if (!fresh && c && Date.now() - c.t < 3 * 60e3) return c.list;
+  const list = await indexerReleases(sub);
+  relCache.set(k, { list, t: Date.now() });
+  return list;
+}
+
+const REASON_TXT = {
+  'uncached': 'release není v cache TorBoxu',
+  'zip': 'TorBox drží release jako .zip (nejde číst po částech)',
+  'no-file': 'soubor dílu (podle indexeru) se v releasu nenašel',
+  'no-mkv': 'release neobsahuje MKV',
+  'no-files': 'TorBox nevrátil seznam souborů',
+  'no-hash': 'release nemá infohash',
+  'no-cues': 'soubor nemá index titulků (Cues)',
+  'only-bitmap': 'má jen bitmapové titulky (PGS)',
+  'only-signs': 'má jen Signs & Songs',
+  'no-text-track': 'nemá textové titulky',
+  'no-cues-for-subs': 'titulky nejsou v indexu (Cues)',
+};
+
+// Prozkoumá jeden release pro daný díl. Vrací i seznam všech stop (pro okno).
+async function probeRelease(sub, rel) {
+  let L;
+  try {
+    L = await episodeLink(
+      { infohash: rel.infohash, filename: rel.targetFilename, filesize: rel.targetFilesize, singleFile: rel.singleFile },
+      { assumeCached: true });
+  } catch (e) { return { ok: false, reason: 'error', msg: e.message }; }
+  if (!L.url) {
+    if (L.reason === 'zip') memoSet(sub.anilist_id, rel.at_id, { bad: true });
+    return { ok: false, reason: L.reason, msg: REASON_TXT[L.reason] || L.skip };
+  }
+  try {
+    const tl = await readTimeline(L.url, { refresh: L.refresh });
+    const tracks = tl.tracks.map((t) => ({ num: t.num, codec: t.codec, lang: t.lang, name: t.name, events: t.cues.length }));
+    if (tl.noCues) return { ok: false, reason: 'no-cues', msg: REASON_TXT['no-cues'], file: L.file, tracks };
+    const pk = pickDialogueTrack(tl.tracks);
+    if (!pk.track) {
+      memoSet(sub.anilist_id, rel.at_id, { bad: true });
+      return { ok: false, reason: pk.reason, msg: REASON_TXT[pk.reason] || pk.reason, file: L.file, tracks };
+    }
+    memoSet(sub.anilist_id, rel.at_id, { tier: pk.tier });
+    return { ok: true, file: L.file, pk, tl, tracks, kb: Math.round(tl.bytes / 1024) };
+  } catch (e) { return { ok: false, reason: 'error', msg: e.message, file: L.file }; }
+  finally { await L.cleanup?.(); }
+}
+
+/** Seznam BD/DVD releasů pro okno „Vybrat rip" (všechny; necached označené). */
+export async function bdCandidates(sub) {
+  if (!CONFIG.torbox.key) return { ok: false, error: 'Chybí TORBOX_API_KEY.' };
+  if (sub.episode == null) return { ok: false, error: 'Záznam nemá číslo dílu.' };
+  const list = await releasesFor(sub, true);
+  const cached = list.length ? await cachedHashes(list.map((r) => r.infohash)) : new Set();
+  const pin = sub.anilist_id ? getBdPin(sub.anilist_id) : null;
+  const TIER = { 1: 'anglická ASS', 2: 'ASS jiného jazyka', 3: 'anglická SRT', 4: 'jiná stopa' };
+  return {
+    ok: true, episode: sub.episode, stats: list.stats || {},
+    pin: pin ? { infohash: pin.infohash, label: pin.label } : null,
+    candidates: list.map((r) => {
+      const m = memoGet(sub.anilist_id, r.at_id);
+      return {
+        infohash: r.infohash, at_id: r.at_id, group: r.group, name: r.name, kind: r.kind, remux: !!r.remux,
+        seeders: r.seeders, cached: !!(r.infohash && cached.has(r.infohash)), file: r.targetFilename,
+        known: m ? (m.bad ? 'nepoužitelný (bez textových titulků)' : TIER[m.tier] || null) : null,
+        pinned: !!(pin && pin.infohash === r.infohash),
+      };
+    }),
+  };
+}
+
+/** „Zjistit stopy" — prozkoumá jeden rip pro daný díl (nic neukládá). */
+export async function bdProbe(sub, infohash) {
+  const ih = String(infohash || '').toLowerCase();
+  const rel = (await releasesFor(sub)).find((r) => r.infohash === ih);
+  if (!rel) return { ok: false, error: `Indexer tenhle rip pro díl ${sub.episode} nevrací.` };
+  if (!(await cachedHashes([ih])).has(ih)) return { ok: false, error: REASON_TXT.uncached };
+  const p = await probeRelease(sub, rel);
+  return {
+    ok: p.ok, file: p.file || null, tracks: p.tracks || [], kb: p.kb || null,
+    pick: p.ok ? p.pk.why : null, error: p.ok ? null : p.msg,
+  };
+}
+
+// Přečas přesně na jeden release (ruční volba / „Použít"). Žádná záloha.
+async function resyncOnRelease(sub, source, infohash, { forced, pin }) {
+  const who = forced ? 'Vybraný rip' : `Ručně zvolený rip${pin && pin.label ? ` „${pin.label}"` : ''}`;
+  const fail = (error, extra = {}) => ({ ok: false, stage: forced ? 'manual-pick' : 'pin', pinned: !forced, error, ...extra });
+
+  const rel = (await releasesFor(sub, !forced)).find((r) => r.infohash === infohash);
+  if (!rel) return fail(`${who} pro díl ${sub.episode} indexer nevrací — díl v něm nejspíš není.`);
+  if (!(await cachedHashes([infohash])).has(infohash)) return fail(`${who}: ${REASON_TXT.uncached}.`);
+
+  const p = await probeRelease(sub, rel);
+  if (!p.ok) return fail(`${who} pro díl ${sub.episode}: ${p.msg}.`, { tracks: p.tracks });
+
+  const cz = await loadCz(sub);
+  if (!cz) return { ok: false, stage: 'cz', error: 'CZ titulek se nepodařilo stáhnout z R2.' };
+  const sync = await callSubsync(timelineToSrt(p.pk.track, p.tl.scale), 'ref.srt', cz.czBuf, cz.czName);
+  if (!(sync.ok && sync.output)) {
+    if (sync.bad_input === 'subtitle') {
+      return { ok: false, stage: 'cz', detail: sync,
+        error: 'CZ titulek má vadný formát, který alass nepřečte (ani po narovnání). Oprav zdrojový titulek nebo použij ruční referenci.' };
+    }
+    return fail(`${who}: přečas selhal (${sync.message || 'alass'}).`, { detail: sync });
+  }
+  const saved = await saveMachine(sub, sync.output, p.file, source, rel.kind, rel.group || null, rel.infohash);
+  if (forced && sub.anilist_id) setBdPin(sub.anilist_id, { infohash: rel.infohash, atId: rel.at_id, label: rel.name });
+  return {
+    ok: true, via: forced ? 'manual-pick' : 'pin', pinned: true, kind: rel.kind, release: p.file, group: rel.group,
+    seeders: rel.seeders, episode: sub.episode, format: sync.format, elapsed_ms: sync.elapsed_ms,
+    machine_sub_id: saved.machineId, file_bytes: saved.bytes, tried: 1,
+    ref_source: 'torbox', ref_track: p.pk.why, ref_kb: p.kb, pin_label: rel.name,
+  };
+}
+
+export async function bdResync(sub, source = 'hiyori', opts = {}) {
   if (sub.episode == null) {
     return { ok: false, stage: 'input', error: 'Auto přečas potřebuje číslo dílu (u filmu použij ruční referenci).' };
   }
@@ -504,6 +629,15 @@ export async function bdResync(sub, source = 'hiyori') {
   if (!useTorbox && !useTosho) {
     return { ok: false, stage: 'config',
       error: 'Není nastavený žádný zdroj reference — chybí TORBOX_API_KEY (a Anime Tosho je vypnuté). Použij ruční referenci.' };
+  }
+
+  // Ruční volba ripu VŽDY vede (vynucený rip z okna, jinak uložená volba anime).
+  // opts.ignorePin = jednorázová automatika na žádost uživatele.
+  const forced = opts.infohash ? String(opts.infohash).toLowerCase() : null;
+  const pin = !forced && !opts.ignorePin && sub.anilist_id ? getBdPin(sub.anilist_id) : null;
+  if (forced || pin) {
+    if (!useTorbox) return { ok: false, stage: 'config', error: 'Ruční volba ripu potřebuje TORBOX_API_KEY.' };
+    return resyncOnRelease(sub, source, forced || pin.infohash, { forced: !!forced, pin });
   }
 
   // Kandidáti: jen z indexeru (sezóna/díl/specialy/zdroj/soubor dílu určil on).
@@ -586,7 +720,7 @@ export async function bdResync(sub, source = 'hiyori') {
       tried++;
       const sync = await callSubsync(timelineToSrt(p.pk.track, p.tl.scale), 'ref.srt', cz.czBuf, cz.czName);
       if (sync.ok && sync.output) {
-        const saved = await saveMachine(sub, sync.output, p.file, source, p.rel.kind, p.rel.group || null);
+        const saved = await saveMachine(sub, sync.output, p.file, source, p.rel.kind, p.rel.group || null, p.rel.infohash);
         if (sub.anilist_id && via === 'indexer') setBdPref(sub.anilist_id, p.rel.at_id);
         return { done: {
           ok: true, via, kind: p.rel.kind, release: p.file, group: p.rel.group, seeders: p.rel.seeders,
