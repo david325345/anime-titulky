@@ -487,6 +487,14 @@ async function resyncAndSave(sub, refBuf, refName, releaseTitle, source, kind = 
 // seedům), fallback feed ?aid=. Kandidáty řadí BD→ne-PGS→seedy→žebříček a
 // v pořadí zkouší: stáhni titulkovou stopu → subsync → bitmapové (PGS) /
 // neparsovatelné PŘESKOČ. Uloží první, co projde. Grupa strojovky = 🤖 grupa BD ripu.
+// Paměť prozkoumaných releasů per anime (6 h): u dalších dílů série se release,
+// kde byla anglická ASS, zkusí PRVNÍ, a releasy s jen bitmapami/Signs/zipem až
+// nakonec → hromadný přečas neprochází znovu stejné releasy (šetří TorBox).
+const releaseMemo = new Map();   // `${anilist}:${at_id}` → { tier, bad, t }
+const MEMO_TTL = 6 * 3600e3;
+const memoGet = (al, at) => { const m = releaseMemo.get(`${al}:${at}`); return m && Date.now() - m.t < MEMO_TTL ? m : null; };
+const memoSet = (al, at, v) => { if (al) releaseMemo.set(`${al}:${at}`, { ...v, t: Date.now() }); };
+
 export async function bdResync(sub, source = 'hiyori') {
   if (sub.episode == null) {
     return { ok: false, stage: 'input', error: 'Auto přečas potřebuje číslo dílu (u filmu použij ruční referenci).' };
@@ -553,7 +561,7 @@ export async function bdResync(sub, source = 'hiyori') {
       } catch (e) { why.sourceError++; lastErr = e.message; return null; }
       if (!L.url) {
         if (L.reason === 'uncached') why.notCached++;
-        else if (L.reason === 'zip') why.zip++;
+        else if (L.reason === 'zip') { why.zip++; memoSet(sub.anilist_id, rel.at_id, { bad: true }); }
         else why.noFile++;
         return null;
       }
@@ -566,8 +574,10 @@ export async function bdResync(sub, source = 'hiyori') {
           else if (pk.reason === 'only-signs') why.onlySigns++;
           else if (pk.reason === 'no-cues-for-subs') why.noCues++;
           else why.noTracks++;
+          memoSet(sub.anilist_id, rel.at_id, { bad: true });   // stopy jsou napříč batchem stejné
           return null;
         }
+        memoSet(sub.anilist_id, rel.at_id, { tier: pk.tier });
         return { rel, file: L.file, pk, tl };
       } catch (e) { why.sourceError++; lastErr = e.message; return null; }
       finally { await L.cleanup(); }
@@ -593,8 +603,10 @@ export async function bdResync(sub, source = 'hiyori') {
 
     // BD napřed; DVD jen jako záloha, když žádný BD nevyjde
     const groups = [inCache.filter((r) => r.kind !== '🤖 DVD'), inCache.filter((r) => r.kind === '🤖 DVD')];
-    for (const group of groups) {
-      if (!group.length) continue;
+    for (const g0 of groups) {
+      if (!g0.length) continue;
+      const rankOf = (r) => { const m = memoGet(sub.anilist_id, r.at_id); return m ? (m.tier === 1 ? 0 : m.bad ? 2 : 1) : 1; };
+      const group = g0.map((r, i) => ({ r, i })).sort((a, b) => rankOf(a.r) - rankOf(b.r) || a.i - b.i).map((x) => x.r);
       // 1) prozkoumej nejvýš probeMax (6) cached releasů; anglická ASS (úroveň 1) ukončí hledání
       const probes = [];
       let idx = 0;

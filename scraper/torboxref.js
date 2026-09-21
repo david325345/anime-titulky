@@ -8,114 +8,185 @@
 //
 // Ověřeno 21.9.: Solo Leveling [Breeze] batch → díl 1 podle jména z 12 MKV,
 // 26 titulkových stop, 975 kB ze 697 MB, 7,3 s.
+import fs from 'node:fs';
+import path from 'node:path';
 import { CONFIG } from '../config.js';
 
 // ── TorBox API ──────────────────────────────────────────────────────────────
-async function tb(path, opts = {}) {
-  const r = await fetch(CONFIG.torbox.api + path, {
-    ...opts,
-    headers: { Authorization: `Bearer ${CONFIG.torbox.key}`, ...(opts.headers || {}) },
-    signal: AbortSignal.timeout(20000),
-  });
-  const j = await r.json().catch(() => ({}));
-  if (j.success === false) throw new Error(`TorBox ${path.split('?')[0]}: ${j.detail || j.error || r.status}`);
-  return j;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let apiCalls = 0;                                   // počítadlo pro diagnostiku
+export const torboxApiCalls = () => apiCalls;
+
+async function tb(p, opts = {}) {
+  const waits = [2000, 5000, 10000];                // při „too many requests" počkej a zkus znovu
+  for (let attempt = 0; ; attempt++) {
+    apiCalls++;
+    const r = await fetch(CONFIG.torbox.api + p, {
+      ...opts,
+      headers: { Authorization: `Bearer ${CONFIG.torbox.key}`, ...(opts.headers || {}) },
+      signal: AbortSignal.timeout(20000),
+    });
+    const j = await r.json().catch(() => ({}));
+    const limited = r.status === 429 || /rate.?limit|too many/i.test(String(j.detail || j.error || ''));
+    if (limited && attempt < waits.length) { await sleep(waits[attempt]); continue; }
+    if (j.success === false || limited) throw new Error(`TorBox ${p.split('?')[0]}: ${j.detail || j.error || r.status}`);
+    return j;
+  }
 }
 
 const base = (p) => String(p || '').split('/').pop().toLowerCase();
 
-/** Které z infohashů jsou v cache TorBoxu — jedním dotazem (po dávkách 50). */
+// ── ŠETŘENÍ VOLÁNÍ TORBOXU ─────────────────────────────────────────────────
+// Hromadný přečas bere díly často ze STEJNÉHO batche. Proto si pamatujeme:
+//  • stav cache hashů (30 min) — checkcached jen pro dosud neznámé,
+//  • seznam torrentů v účtu (60 s) — mylist jen jednou za minutu,
+//  • přidaný torrent + jeho soubory — batch se přidá JEDNOU a smaže až po 10 min
+//    nečinnosti (ne po každém dílu); seznam přidaných je v souboru, takže je
+//    úklid dotažen i po restartu,
+//  • odkazy na soubory (2 h; TorBox je drží ~3 h).
+const TTL = { cache: 30 * 60e3, account: 60e3, keep: 10 * 60e3, link: 2 * 3600e3 };
+const ccMemo = new Map();          // hash → { v:boolean, t }
+const torrents = new Map();        // hash → { tid, added, files|null, used }
+const links = new Map();           // `${tid}:${fid}` → { url, t }
+let account = null;                // { map: Map(hash→tid), t }
+
+const ADDED_FILE = path.join(CONFIG.dataDir || '.', 'torbox-added.json');
+function loadAdded() { try { return JSON.parse(fs.readFileSync(ADDED_FILE, 'utf8')) || []; } catch { return []; } }
+function saveAdded() {
+  const list = [...torrents.entries()].filter(([, e]) => e.added).map(([hash, e]) => ({ hash, tid: e.tid, used: e.used }));
+  try { fs.writeFileSync(ADDED_FILE, JSON.stringify(list)); } catch {}
+}
+// po restartu: torrenty, které jsme přidali dřív, zařaď k úklidu
+for (const x of loadAdded()) if (x && x.tid) torrents.set(x.hash, { tid: x.tid, added: true, files: null, used: x.used || 0 });
+
+async function sweep(force = false) {
+  const now = Date.now();
+  let changed = false;
+  for (const [hash, e] of torrents) {
+    if (!e.added || (!force && now - e.used < TTL.keep)) continue;
+    try {
+      await tb('/torrents/controltorrent', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ torrent_id: e.tid, operation: 'delete' }) });
+    } catch {}
+    torrents.delete(hash);
+    if (account) account.map.delete(hash);
+    for (const k of links.keys()) if (k.startsWith(e.tid + ':')) links.delete(k);
+    changed = true;
+  }
+  if (changed) saveAdded();
+}
+if (CONFIG.torbox && CONFIG.torbox.key) setInterval(() => { sweep().catch(() => {}); }, 60e3).unref();
+/** Okamžitý úklid všech torrentů, které jsme přidali (např. ručně / při testu). */
+export const flushTorbox = () => sweep(true);
+
+/** Které z infohashů jsou v cache TorBoxu — ptá se jen na dosud neznámé (po 50). */
 export async function cachedHashes(hashes) {
   const list = [...new Set((hashes || []).map((h) => String(h || '').toLowerCase()).filter((h) => /^[0-9a-f]{40}$/.test(h)))];
-  const out = new Set();
-  for (let i = 0; i < list.length; i += 50) {
-    const chunk = list.slice(i, i + 50);
+  const now = Date.now();
+  const unknown = list.filter((h) => { const m = ccMemo.get(h); return !m || now - m.t > TTL.cache; });
+  for (let i = 0; i < unknown.length; i += 50) {
+    const chunk = unknown.slice(i, i + 50);
     const cc = await tb(`/torrents/checkcached?hash=${chunk.join(',')}&format=object`);
-    for (const h of Object.keys((cc && cc.data) || {})) out.add(h.toLowerCase());
+    const hit = new Set(Object.keys((cc && cc.data) || {}).map((h) => h.toLowerCase()));
+    for (const h of chunk) ccMemo.set(h, { v: hit.has(h), t: now });
   }
-  return out;
+  return new Set(list.filter((h) => ccMemo.get(h)?.v));
+}
+
+async function accountMap() {
+  if (account && Date.now() - account.t < TTL.account) return account.map;
+  const mine = await tb('/torrents/mylist?bypass_cache=true');
+  const map = new Map();
+  for (const t of Array.isArray(mine.data) ? mine.data : []) if (t.hash) map.set(String(t.hash).toLowerCase(), t.id);
+  account = { map, t: Date.now() };
+  return map;
+}
+
+async function torrentFor(hash) {
+  const known = torrents.get(hash);
+  if (known) { known.used = Date.now(); return known; }
+  const inAccount = (await accountMap()).get(hash);
+  if (inAccount) {                                   // už v účtu → použij, NIKDY nemaž
+    const e = { tid: inAccount, added: false, files: null, used: Date.now() };
+    torrents.set(hash, e);
+    return e;
+  }
+  const fd = new FormData();
+  fd.append('magnet', `magnet:?xt=urn:btih:${hash}`);
+  const cr = await tb('/torrents/createtorrent', { method: 'POST', body: fd });
+  const tid = cr.data && cr.data.torrent_id;
+  if (!tid) return null;
+  const e = { tid, added: true, files: null, used: Date.now() };
+  torrents.set(hash, e);
+  if (account) account.map.set(hash, tid);
+  saveAdded();
+  return e;
+}
+
+async function filesOf(e) {
+  if (e.files) return e.files;
+  for (let i = 0; i < 10; i++) {
+    const ml = await tb(`/torrents/mylist?id=${e.tid}&bypass_cache=true`);
+    const files = (ml.data && ml.data.files) || [];
+    if (files.length) { e.files = files; return files; }
+    await sleep(1000);
+  }
+  return [];
+}
+
+async function linkFor(tid, fid) {
+  const k = `${tid}:${fid}`, m = links.get(k);
+  if (m && Date.now() - m.t < TTL.link) return m.url;
+  const dl = await tb(`/torrents/requestdl?token=${CONFIG.torbox.key}&torrent_id=${tid}&file_id=${fid}`);
+  if (dl.data) links.set(k, { url: dl.data, t: Date.now() });
+  return dl.data || null;
 }
 
 /**
  * Odkaz na konkrétní soubor dílu v (batch) releasu.
- * @param {{infohash:string, filename?:string, filesize?:number}} target
+ * Torrent se přidá jen jednou a uklidí se až po nečinnosti (viz sweep).
  * @returns {Promise<{url,file,how,total,cleanup}|{skip:string,reason:string}>}
- *   reason: 'uncached' | 'no-files' | 'zip' | 'no-mkv' | 'no-file'
  */
 export async function episodeLink(target, { assumeCached = false } = {}) {
   const hash = String(target.infohash || '').toLowerCase();
   if (!/^[0-9a-f]{40}$/.test(hash)) return { reason: 'no-hash', skip: 'release nemá infohash' };
-
-  // jen cached — necached by se musel stahovat (a to nechceme)
-  if (!assumeCached) {
-    const cc = await tb(`/torrents/checkcached?hash=${hash}&format=object`);
-    if (!cc.data || !cc.data[hash]) return { reason: 'uncached', skip: 'release není v cache TorBoxu' };
+  if (!assumeCached && !(await cachedHashes([hash])).has(hash)) {
+    return { reason: 'uncached', skip: 'release není v cache TorBoxu' };
   }
+  const noop = async () => {};                       // úklid řeší sweep po nečinnosti
 
-  // už je v účtu? → použij a NEMAŽ. Jinak přidej a po přečtení smaž.
-  const mine = await tb('/torrents/mylist?bypass_cache=true');
-  const existing = (Array.isArray(mine.data) ? mine.data : [])
-    .find((t) => String(t.hash || '').toLowerCase() === hash);
-  let tid, added = false;
-  if (existing) tid = existing.id;
-  else {
-    const fd = new FormData();
-    fd.append('magnet', `magnet:?xt=urn:btih:${hash}`);
-    const cr = await tb('/torrents/createtorrent', { method: 'POST', body: fd });
-    tid = cr.data && cr.data.torrent_id;
-    added = true;
-  }
-  if (!tid) return { reason: 'no-files', skip: 'TorBox nevrátil torrent_id' };
-
-  const cleanup = async () => {
-    if (!added) return;
-    await tb('/torrents/controltorrent', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ torrent_id: tid, operation: 'delete' }),
-    }).catch(() => {});
-  };
-
-  let files = [];
-  for (let i = 0; i < 10 && !files.length; i++) {
-    const ml = await tb(`/torrents/mylist?id=${tid}&bypass_cache=true`);
-    files = (ml.data && ml.data.files) || [];
-    if (!files.length) await new Promise((r) => setTimeout(r, 1000));
-  }
-  if (!files.length) { await cleanup(); return { reason: 'no-files', skip: 'TorBox nevrátil seznam souborů' }; }
+  const e = await torrentFor(hash);
+  if (!e) return { reason: 'no-files', skip: 'TorBox nevrátil torrent_id', cleanup: noop };
+  const files = await filesOf(e);
+  if (!files.length) return { reason: 'no-files', skip: 'TorBox nevrátil seznam souborů', cleanup: noop };
 
   const mkv = files.filter((f) => /\.(mkv|webm)$/i.test(f.short_name || f.name || ''));
   if (!mkv.length) {
     const zip = files.some((f) => /zip/i.test(f.mimetype || '') || /\.zip$/i.test(f.short_name || ''));
-    await cleanup();
     return zip
-      ? { reason: 'zip', skip: 'TorBox drží release jako .zip (range nefunguje)' }
-      : { reason: 'no-mkv', skip: 'release neobsahuje MKV' };
+      ? { reason: 'zip', skip: 'TorBox drží release jako .zip (range nefunguje)', cleanup: noop }
+      : { reason: 'no-mkv', skip: 'release neobsahuje MKV', cleanup: noop };
   }
 
   // Výběr dílu PODLE INDEXERU: jeho jméno souboru → přesná velikost → ±0,1 %.
-  // NIKDY files[index] (TorBox má jiné pořadí) a nic se neluští z názvů — když
-  // soubor podle údajů indexeru nenajdeme, release přeskočíme.
+  // NIKDY files[index] (TorBox má jiné pořadí) a nic se neluští z názvů.
   let pick = null, how = null;
   if (target.filename) {
     pick = mkv.find((f) => base(f.short_name || f.name) === base(target.filename));
     if (pick) how = 'jméno';
   }
   const size = Number(target.filesize) || 0;
-  if (!pick && size) {
-    pick = mkv.find((f) => Number(f.size) === size);
-    if (pick) how = 'velikost';
-  }
+  if (!pick && size) { pick = mkv.find((f) => Number(f.size) === size); if (pick) how = 'velikost'; }
   if (!pick && size) {
     pick = mkv.find((f) => Math.abs(Number(f.size) - size) / size < 0.001);
     if (pick) how = 'velikost ±0,1 %';
   }
   if (!pick && target.singleFile && mkv.length === 1) { pick = mkv[0]; how = 'jediný soubor (dle indexeru)'; }
-  if (!pick) { await cleanup(); return { reason: 'no-file', skip: `soubor dílu se mezi ${mkv.length} MKV nenašel` }; }
+  if (!pick) return { reason: 'no-file', skip: `soubor dílu se mezi ${mkv.length} MKV nenašel`, cleanup: noop };
 
-  const dl = await tb(`/torrents/requestdl?token=${CONFIG.torbox.key}&torrent_id=${tid}&file_id=${pick.id}`);
-  if (!dl.data) { await cleanup(); return { reason: 'no-file', skip: 'TorBox nevrátil odkaz na soubor' }; }
-  return { url: dl.data, file: pick.short_name || pick.name, how, total: mkv.length, cleanup };
+  const url = await linkFor(e.tid, pick.id);
+  if (!url) return { reason: 'no-file', skip: 'TorBox nevrátil odkaz na soubor', cleanup: noop };
+  return { url, file: pick.short_name || pick.name, how, total: mkv.length, cleanup: noop };
 }
 
 // ── MKV: hlavička + Tracks + Cues přes HTTP range ──────────────────────────
