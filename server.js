@@ -9,14 +9,11 @@ import {
   overviewCounts, recentSubs, recentRuns, getMeta, getSub, findSubs, subsAvailability,
   listSubs, deleteSub, recentlyAdded, markDownloaded, allSubs, updateSubMeta,
   listAkihabaraAnime, akihabaraAnimeDetail, akihabaraStats, resetSubDownload,
-  machineVersionsFor, getAkiSub, bulkBdTargetsHiyori, bulkBdTargetsAki,
-  insertRequest, listRequests, getRequest, setRequestStatus, requestStatusForAnilist,
-  backfillQuality,
+  machineVersionsFor, getAkiSub, bulkBdTargetsHiyori, bulkBdTargetsAki, getBdPin, clearBdPin,
 } from './db.js';
-import { classifyQuality, releaseGroups } from './scraper/quality.js';
 import * as hanabi from './scraper/sources/hanabi.js';
 import { saveSubFile } from './scraper/download.js';
-import { bdResync, bdResyncManual } from './scraper/bdresync.js';
+import { bdResync, bdResyncManual, bdCandidates, bdProbe } from './scraper/bdresync.js';
 import AdmZip from 'adm-zip';
 import { r2PublicUrl, r2Get, r2Delete } from './r2.js';
 import { liveDbGzip, backupDbToR2, startDbBackup, restoreDbFromBuffer } from './backup.js';
@@ -75,9 +72,6 @@ app.get('/api/subs', (req, res) => {
     group: r.group_name,
     release: r.release,
     version: r.version,
-    // na jaký zdroj je titulek načasovaný + video skupiny (kanonicky dle indexeru)
-    quality: r.quality || classifyQuality(r.release),
-    release_groups: releaseGroups(r.release),
     episode: r.episode,
     kind: r.kind,
     source: r.extern_domain || 'hiyori',
@@ -90,20 +84,9 @@ app.get('/api/subs', (req, res) => {
   res.json({ matched_by: matchedBy, count: subs.length, subs });
 });
 
-// Povolené originy pro veřejné read/request endpointy (extension na těchto webech).
-const CORS_ALLOWED_ORIGINS = ['https://hiyori.cz', 'https://myanimelist.net', 'https://anilist.co'];
-function applyCors(req, res) {
-  const origin = req.headers.origin;
-  if (CORS_ALLOWED_ORIGINS.includes(origin)) {
-    res.setHeader('Access-Control-Allow-Origin', origin);
-    res.setHeader('Vary', 'Origin');
-  }
-}
-
 // GET /api/subs/available?anilist=154587&mal=52991[&episode=5]
 // Rychlá odpověď, zda pro anime/díl máme titulky na R2 (bez plných dat).
 app.get('/api/subs/available', (req, res) => {
-  applyCors(req, res); // povol čtení z whitelistovaných extension originů
   const anilist = Number(req.query.anilist) || null;
   const mal = Number(req.query.mal) || null;
   const episode = req.query.episode != null && req.query.episode !== ''
@@ -122,76 +105,25 @@ app.get('/api/subs/available', (req, res) => {
     subs_total: a.subs_total,         // kolik titulků celkem (vč. variant)
     langs: a.langs,                   // souhrn jazyků
     episodes: a.episodes,             // [{episode, subs:[{lang,group,release}]}]
-    request_status: requestStatusForAnilist(anilist), // 'pending'|'done'|null — pro tlačítko v extension
   });
 });
-
-// --- Požadavky na přidání anime z extension (veřejné, PŘED basicAuth) ---
-
-// CORS preflight pro POST /api/request-anime
-app.options('/api/request-anime', (req, res) => {
-  applyCors(req, res);
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  res.sendStatus(204);
-});
-
-// Jednoduchý paměťový rate-limit na IP (20 requestů / hodinu). Resetuje se při
-// restartu — pro anti-spam veřejného endpointu bohatě stačí.
-const reqAnimeHits = new Map(); // ip -> [timestamp, ...]
-function rateOk(ip, maxPerHour = 20) {
-  const now = Date.now();
-  const hourAgo = now - 3600000;
-  const hits = (reqAnimeHits.get(ip) || []).filter((t) => t > hourAgo);
-  if (hits.length >= maxPerHour) { reqAnimeHits.set(ip, hits); return false; }
-  hits.push(now);
-  reqAnimeHits.set(ip, hits);
-  return true;
-}
-
-// POST /api/request-anime — extension pošle hiyori_id (+ volitelně anilist_id, title).
-app.post('/api/request-anime', express.json(), (req, res) => {
-  applyCors(req, res);
-  const ip = String(req.headers['x-forwarded-for'] || req.ip || '').split(',')[0].trim();
-  if (!rateOk(ip)) {
-    return res.status(429).json({ error: 'Příliš mnoho požadavků, zkus to za chvíli.' });
-  }
-  const hiyoriId = Number(req.body?.hiyori_id) || null;
-  if (!hiyoriId || hiyoriId <= 0) {
-    return res.status(400).json({ error: 'Chybí platné hiyori_id.' });
-  }
-  const anilistId = Number(req.body?.anilist_id) || null;
-  const title = req.body?.title ? String(req.body.title).slice(0, 300) : null;
-  const r = insertRequest({ hiyori_id: hiyoriId, anilist_id: anilistId, title, ip });
-  res.json(r); // { status: 'ok' } nebo { status: 'already_requested' }
-});
-
 
 // GET /api/recent[?days=N] — dnes přidané stažené titulky (na R2), seskupené.
 // Bez days = dnešní den od půlnoci. Veřejné (pro addon).
 app.get('/api/recent', (req, res) => {
-  // ?days=0 → bez časového omezení (všechna anime), ?days=N → posledních N dní,
-  // bez parametru → dnešní den od půlnoci. ?limit=N → nejvýš N anime (jinak vše).
-  const rawDays = req.query.days;
-  const hasDays = rawDays != null && rawDays !== '';
-  const nDays = hasDays ? Number(rawDays) : NaN;
-  const days = Number.isFinite(nDays) && nDays >= 0 ? Math.floor(nDays) : null;
-
-  const nLimit = Number(req.query.limit);
-  const limit = Number.isFinite(nLimit) && nLimit > 0 ? Math.floor(nLimit) : null;
-
-  let since = null;
-  if (days === 0) {
-    since = null;                                   // vše
-  } else if (days) {
+  const days = req.query.days != null && req.query.days !== ''
+    ? Math.max(1, Number(req.query.days) || 1)
+    : null;
+  let since;
+  if (days) {
     since = new Date(Date.now() - days * 86400000); // posledních N dní
   } else {
     since = new Date();
-    since.setHours(0, 0, 0, 0);                     // dnešek od půlnoci (lokální čas serveru)
+    since.setHours(0, 0, 0, 0); // dnešní den od půlnoci (lokální čas serveru)
   }
-  const sinceIso = since ? since.toISOString() : null;
-  const items = recentlyAdded(sinceIso, limit);
-  res.json({ since: sinceIso, days, limit, count: items.length, items });
+  const sinceIso = since.toISOString();
+  const items = recentlyAdded(sinceIso);
+  res.json({ since: sinceIso, count: items.length, items });
 });
 
 // GET /api/all — kompletní výpis všeho staženého na R2, seskupené po anime.
@@ -214,42 +146,6 @@ app.get('/api/all', (req, res) => {
 // Od tohoto bodu je vše CHRÁNĚNO Basic Auth (dashboard + admin)
 // ==================================================================
 app.use(basicAuth);
-
-// --- Požadavky na přidání anime — admin (za basicAuth) ---
-
-// GET /api/requests?status=pending — seznam požadavků pro dashboard.
-app.get('/api/requests', (req, res) => {
-  const status = String(req.query.status || 'pending');
-  res.json({ requests: listRequests(status) });
-});
-
-// POST /api/requests/:id/approve — přidá anime (všechny díly) a označí done.
-app.post('/api/requests/:id/approve', requireUser1, async (req, res) => {
-  const reqRow = getRequest(req.params.id);
-  if (!reqRow) return res.status(404).json({ error: 'Požadavek nenalezen.' });
-  try {
-    const r = await ingestAnime(reqRow.hiyori_id, {}, { manualAdd: true });
-    setRequestStatus(reqRow.id, 'done');
-    res.json({
-      ok: true,
-      hiyori_id: reqRow.hiyori_id,
-      title: (r.title || '').replace(/\s*-\s*Hiyori$/i, ''),
-      anilist_id: r.anilistId,
-      found: r.found,
-      added: r.added,
-      blocked: r.blocked,
-    });
-  } catch (e) {
-    res.status(500).json({ error: 'Nepodařilo se přidat anime: ' + e.message });
-  }
-});
-
-// POST /api/requests/:id/reject — zamítne požadavek.
-app.post('/api/requests/:id/reject', requireUser1, (req, res) => {
-  const n = setRequestStatus(req.params.id, 'rejected');
-  if (!n) return res.status(404).json({ error: 'Požadavek nenalezen.' });
-  res.json({ ok: true });
-});
 
 // role přihlášeného účtu — frontend podle toho skryje mazací tlačítka user2
 app.get('/api/whoami', (req, res) => {
@@ -348,7 +244,6 @@ app.get('/api/subs-list', (req, res) => {
             sub_id: m.sub_id,
             release: m.release,
             version: m.version,
-            quality: m.quality || classifyQuality(m.release),
             file_bytes: m.file_bytes,
             downloaded_at: m.downloaded_at,
           }
@@ -448,7 +343,9 @@ app.post('/api/sub/:subId/reset', requireUser1, async (req, res) => {
 // „přečas na BD" (BD auto): z původního staženého CZ titulku → indexer (anidb) →
 // Tosho (BD reference) → subsync (alass) → uložení strojové verze na R2 + DB.
 // Nemění původní záznam; vytvoří/přepíše navázanou strojovou verzi.
-app.post('/api/sub/:subId/bd-resync', async (req, res) => {
+const bdOpts = (req) => ({ infohash: req.body?.infohash || null, ignorePin: !!req.body?.ignorePin });
+
+app.post('/api/sub/:subId/bd-resync', express.json(), async (req, res) => {
   const subId = Number(req.params.subId);
   const sub = getSub(subId);
   if (!sub) return res.status(404).json({ ok: false, error: 'Záznam nenalezen.' });
@@ -462,7 +359,7 @@ app.post('/api/sub/:subId/bd-resync', async (req, res) => {
     return res.status(400).json({ ok: false, error: 'Záznam nemá číslo dílu.' });
   }
   try {
-    const r = await bdResync(sub);
+    const r = await bdResync(sub, 'hiyori', bdOpts(req));
     res.json(r);
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
@@ -520,30 +417,71 @@ function akiSubUnified(row) {
 app.get('/api/sub/:subId/bulk-bd-targets', (req, res) => {
   const ref = getSub(Number(req.params.subId));
   if (!ref) return res.status(404).json({ error: 'Záznam nenalezen.' });
-  const targets = bulkBdTargetsHiyori(ref.anilist_id, ref.mal_id);
-  res.json({ anime_title: ref.anime_title, total: targets.length, targets });
+  const pin = getBdPin(ref.anilist_id);
+  const targets = bulkBdTargetsHiyori(ref.anilist_id, ref.mal_id, pin && pin.infohash);
+  res.json({ anime_title: ref.anime_title, total: targets.length, targets, pin });
 });
 
 // cíle hromadného přečasu z archivu — dle reprezentativního akihabara_id
 app.get('/api/akihabara/:akiId/bulk-bd-targets', (req, res) => {
   const ref = getAkiSub(Number(req.params.akiId));
   if (!ref) return res.status(404).json({ error: 'Archivní záznam nenalezen.' });
-  const targets = bulkBdTargetsAki(ref.anilist_id);
-  res.json({ anime_title: ref.anime_title, total: targets.length, targets });
+  const pin = getBdPin(ref.anilist_id);
+  const targets = bulkBdTargetsAki(ref.anilist_id, pin && pin.infohash);
+  res.json({ anime_title: ref.anime_title, total: targets.length, targets, pin });
 });
 
 // cíle hromadného přečasu z archivu — přímo dle anilist_id (tlačítko „přečasovat vše")
 app.get('/api/akihabara/anime/:anilistId/bulk-bd-targets', (req, res) => {
-  const targets = bulkBdTargetsAki(Number(req.params.anilistId));
-  res.json({ total: targets.length, targets });
+  const pin = getBdPin(Number(req.params.anilistId));
+  const targets = bulkBdTargetsAki(Number(req.params.anilistId), pin && pin.infohash);
+  res.json({ total: targets.length, targets, pin });
 });
 
-app.post('/api/akihabara/:akiId/bd-resync', async (req, res) => {
+// ── Ruční volba ripu ─────────────────────────────────────────────────────
+// sub z hlavní tabulky nebo z archivu → jednotný tvar pro bdresync
+function bdSubFrom(kind, id) {
+  if (kind === 'akihabara') { const row = getAkiSub(Number(id)); return row && row.r2_key ? { sub: akiSubUnified(row) } : null; }
+  const sub = getSub(Number(id));
+  return sub && sub.r2_key && !sub.machine_of ? { sub } : null;
+}
+for (const kind of ['sub', 'akihabara']) {
+  const base = kind === 'sub' ? '/api/sub/:id' : '/api/akihabara/:id';
+  const src = kind === 'sub' ? 'hiyori' : 'akihabara';
+  // aktuální ruční volba (levné — jen DB)
+  app.get(`${base}/bd-pin`, (req, res) => {
+    const x = bdSubFrom(src, req.params.id);
+    if (!x) return res.status(404).json({ ok: false, error: 'Záznam nenalezen.' });
+    res.json({ ok: true, anilist_id: x.sub.anilist_id || null, pin: getBdPin(x.sub.anilist_id) });
+  });
+  // seznam BD/DVD releasů pro okno „Vybrat rip"
+  app.get(`${base}/bd-candidates`, async (req, res) => {
+    const x = bdSubFrom(src, req.params.id);
+    if (!x) return res.status(404).json({ ok: false, error: 'Záznam nenalezen.' });
+    try { res.json(await bdCandidates(x.sub)); } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+  });
+  // „Zjistit stopy" jednoho ripu
+  app.post(`${base}/bd-probe`, express.json(), async (req, res) => {
+    const x = bdSubFrom(src, req.params.id);
+    if (!x) return res.status(404).json({ ok: false, error: 'Záznam nenalezen.' });
+    if (!req.body?.infohash) return res.status(400).json({ ok: false, error: 'Chybí infohash.' });
+    try { res.json(await bdProbe(x.sub, req.body.infohash)); } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+  });
+  // zrušení ruční volby
+  app.delete(`${base}/bd-pin`, (req, res) => {
+    const x = bdSubFrom(src, req.params.id);
+    if (!x) return res.status(404).json({ ok: false, error: 'Záznam nenalezen.' });
+    clearBdPin(x.sub.anilist_id);
+    res.json({ ok: true });
+  });
+}
+
+app.post('/api/akihabara/:akiId/bd-resync', express.json(), async (req, res) => {
   const row = getAkiSub(Number(req.params.akiId));
   if (!row) return res.status(404).json({ ok: false, error: 'Archivní záznam nenalezen.' });
   if (!row.r2_key) return res.status(400).json({ ok: false, error: 'Archivní titulek není na R2.' });
   try {
-    const r = await bdResync(akiSubUnified(row), 'akihabara');
+    const r = await bdResync(akiSubUnified(row), 'akihabara', bdOpts(req));
     res.json(r);
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
@@ -573,7 +511,7 @@ app.post('/api/akihabara/:akiId/bd-resync-manual',
 app.patch('/api/sub/:subId', requireUser1, express.json(), (req, res) => {
   const subId = Number(req.params.subId);
   if (!getSub(subId)) return res.status(404).json({ ok: false, error: 'Záznam nenalezen.' });
-  const { group_name, release, lang , quality } = req.body || {};
+  const { group_name, release, lang } = req.body || {};
   // prázdný string → null (vyprázdnění pole je legitimní)
   const norm = (v) => {
     if (v == null) return null;
@@ -584,7 +522,6 @@ app.patch('/api/sub/:subId', requireUser1, express.json(), (req, res) => {
     group_name: norm(group_name),
     release: norm(release),
     lang: norm(lang),
-    quality: norm(quality), // vyplněná = ruční volba → zamkne se
   });
   res.json({ ok: n > 0 });
 });
@@ -807,11 +744,6 @@ app.use((err, req, res, next) => {
 
 app.listen(CONFIG.port, () => {
   console.log(`NimeToDex Titulky běží na portu ${CONFIG.port}`);
-  // jednorázové doplnění kvality u starších záznamů (ruční volby nechá být)
-  try {
-    const n = backfillQuality();
-    if (n) console.log(`[quality] doplněno u ${n} titulků`);
-  } catch (e) { console.error('[quality] backfill selhal:', e.message); }
   console.log(`Data dir: ${CONFIG.dataDir}`);
   if (!CONFIG.auth.user || !CONFIG.auth.pass) {
     console.log('⚠ Dashboard NENÍ chráněný (nastav AUTH_USER a AUTH_PASS).');

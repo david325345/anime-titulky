@@ -3,7 +3,6 @@ import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
 import { CONFIG } from './config.js';
-import { classifyQuality } from './scraper/quality.js';
 
 fs.mkdirSync(CONFIG.dataDir, { recursive: true });
 export const dbPath = path.join(CONFIG.dataDir, 'hiyori.db');
@@ -144,15 +143,13 @@ db.exec('CREATE INDEX IF NOT EXISTS idx_subs_machine_of ON subs(machine_of)');
 // Rozlišuje ID prostory (hiyori sub_id vs archivní akihabara_id se můžou krýt),
 // aby vazba machine_of byla jednoznačná. NULL u legacy řádků bereme jako hiyori.
 ensureColumn('subs', 'machine_source', 'TEXT');
+// machine_ref = infohash BD/DVD releasu, ze kterého vzniklo časování strojovky
+// (ruční volba ripu podle něj pozná díly udělané z JINÉHO ripu).
+ensureColumn('subs', 'machine_ref', 'TEXT');
 // unused_variants = seznam release, které zdroj (hns) nabízel navíc, ale nepoužily
 // se (stáhla se jen jedna varianta). Slouží jen jako upozornění v dashboardu, ať
 // je vidět, že by šlo doplnit další variantu ručně. Text (čárkou oddělené názvy).
 ensureColumn('subs', 'unused_variants', 'TEXT');
-// quality = na jaký video zdroj je titulek načasovaný ('BD' | 'DVD' | 'WEB-DL').
-// Určuje se automaticky z pole `release`. quality_locked=1 znamená, že hodnotu
-// nastavil člověk ručně v dashboardu → automat ji už nikdy nepřepíše.
-ensureColumn('subs', 'quality', 'TEXT');
-ensureColumn('subs', 'quality_locked', 'INTEGER DEFAULT 0');
 
 // Preferovaný BD/DVD release na anime (sticky): jakmile se jeden díl přečasuje
 // úspěšně proti nějakému Tosho releasu, drží se to samé at_id i pro další díly
@@ -162,6 +159,11 @@ db.exec(`CREATE TABLE IF NOT EXISTS bd_pref (
   at_id      INTEGER NOT NULL,
   updated_at TEXT DEFAULT (datetime('now'))
 )`);
+// RUČNÍ volba ripu (David: „ruční vždy vede"): pinned=1 → všechny díly anime se
+// přečasují JEN podle tohoto releasu (infohash), bez automatiky a bez zálohy.
+ensureColumn('bd_pref', 'infohash', 'TEXT');
+ensureColumn('bd_pref', 'pinned', 'INTEGER DEFAULT 0');
+ensureColumn('bd_pref', 'label', 'TEXT');
 
 // Požadavky na přidání anime z hiyori extension (POST /api/request-anime).
 db.exec(`CREATE TABLE IF NOT EXISTS requests (
@@ -221,8 +223,30 @@ export function setBdPref(anilistId, atId) {
   if (!anilistId || !atId) return;
   db.prepare(
     `INSERT INTO bd_pref (anilist_id, at_id, updated_at) VALUES (?, ?, datetime('now'))
-     ON CONFLICT(anilist_id) DO UPDATE SET at_id=excluded.at_id, updated_at=excluded.updated_at`
+     ON CONFLICT(anilist_id) DO UPDATE SET at_id=excluded.at_id, updated_at=excluded.updated_at
+     WHERE COALESCE(bd_pref.pinned,0)=0`          // ruční volbu automatika nepřepíše
   ).run(anilistId, atId);
+}
+
+// Ruční volba ripu pro celé anime.
+export function getBdPin(anilistId) {
+  if (!anilistId) return null;
+  const r = db.prepare('SELECT anilist_id, at_id, infohash, label, updated_at FROM bd_pref WHERE anilist_id=? AND pinned=1')
+    .get(Number(anilistId));
+  return r && r.infohash ? r : null;
+}
+export function setBdPin(anilistId, { infohash, atId, label }) {
+  if (!anilistId || !infohash) return;
+  db.prepare(
+    `INSERT INTO bd_pref (anilist_id, at_id, infohash, pinned, label, updated_at)
+       VALUES (@al, @at, @ih, 1, @label, datetime('now'))
+     ON CONFLICT(anilist_id) DO UPDATE SET at_id=excluded.at_id, infohash=excluded.infohash,
+       pinned=1, label=excluded.label, updated_at=excluded.updated_at`
+  ).run({ al: Number(anilistId), at: Number(atId) || 0, ih: String(infohash).toLowerCase(), label: label || null });
+}
+export function clearBdPin(anilistId) {
+  if (!anilistId) return;
+  db.prepare('UPDATE bd_pref SET pinned=0 WHERE anilist_id=?').run(Number(anilistId));
 }
 
 // --- meta helpers ---
@@ -254,19 +278,14 @@ const _subExists = db.prepare('SELECT 1 FROM subs WHERE sub_id=?');
 const _insertSub = db.prepare(`
   INSERT OR IGNORE INTO subs
     (sub_id,hiyori_id,anilist_id,mal_id,anime_title,episode,lang,group_id,group_name,
-     release,version,kind,url,extern_domain,added_date,first_seen,status,manual_add,quality)
+     release,version,kind,url,extern_domain,added_date,first_seen,status,manual_add)
   VALUES
     (@sub_id,@hiyori_id,@anilist_id,@mal_id,@anime_title,@episode,@lang,@group_id,@group_name,
-     @release,@version,@kind,@url,@extern_domain,@added_date,@first_seen,@status,@manual_add,@quality)
+     @release,@version,@kind,@url,@extern_domain,@added_date,@first_seen,@status,@manual_add)
 `);
 export const subExists = (id) => !!_subExists.get(id);
-// kvalita se odvodí z `release` rovnou při vložení (volající ji posílat nemusí)
 export const insertSub = (row) =>
-  _insertSub.run({
-    manual_add: 0,
-    ...row,
-    quality: row.quality ?? classifyQuality(row.release),
-  }).changes; // 1 = nově vloženo
+  _insertSub.run({ manual_add: 0, ...row }).changes; // 1 = nově vloženo
 
 const _markDownloaded = db.prepare(`
   UPDATE subs SET status='downloaded', filename=@filename, local_path=@local_path,
@@ -284,60 +303,27 @@ export const markFailed = (sub_id, error) =>
 
 export const getSub = (id) => db.prepare('SELECT * FROM subs WHERE sub_id=?').get(id);
 
-// doplní release jen když je prázdný (nepřepisuje hodnotu z hiyori);
-// zároveň dopočítá kvalitu, pokud ji uživatel ručně nezamkl
+// doplní release jen když je prázdný (nepřepisuje hodnotu z hiyori)
 const _setReleaseIfEmpty = db.prepare(
-  "UPDATE subs SET release=@release, quality=CASE WHEN COALESCE(quality_locked,0)=1 THEN quality ELSE @quality END" +
-  " WHERE sub_id=@sub_id AND (release IS NULL OR release='')"
+  "UPDATE subs SET release=@release WHERE sub_id=@sub_id AND (release IS NULL OR release='')"
 );
 export const setReleaseIfEmpty = (sub_id, release) =>
-  _setReleaseIfEmpty.run({ sub_id, release, quality: classifyQuality(release) });
+  _setReleaseIfEmpty.run({ sub_id, release });
 
 // force update release (hns varianty: SubsPlease / BDRip)
-const _setRelease = db.prepare(
-  'UPDATE subs SET release=@release,' +
-  ' quality=CASE WHEN COALESCE(quality_locked,0)=1 THEN quality ELSE @quality END' +
-  ' WHERE sub_id=@sub_id'
-);
-export const setRelease = (sub_id, release) =>
-  _setRelease.run({ sub_id, release, quality: classifyQuality(release) });
-
-// Jednorázové doplnění kvality u starších záznamů (spustí se při startu).
-// Zamčené (ruční) hodnoty nechá být, přepisuje jen prázdné.
-export function backfillQuality() {
-  const rows = db.prepare(
-    "SELECT sub_id, release FROM subs WHERE quality IS NULL AND COALESCE(quality_locked,0)=0"
-  ).all();
-  if (!rows.length) return 0;
-  const upd = db.prepare('UPDATE subs SET quality=? WHERE sub_id=?');
-  const tx = db.transaction((list) => {
-    let n = 0;
-    for (const r of list) {
-      const q = classifyQuality(r.release);
-      if (q) { upd.run(q, r.sub_id); n++; }
-    }
-    return n;
-  });
-  return tx(rows);
-}
+const _setRelease = db.prepare('UPDATE subs SET release=@release WHERE sub_id=@sub_id');
+export const setRelease = (sub_id, release) => _setRelease.run({ sub_id, release });
 
 // editace popisných metadat z webu (Fansub / Release / Jazyk) — nemění Ep ani Zdroj
-// Ruční editace z dashboardu. Kvalita: když ji uživatel vyplní, uloží se a
-// ZAMKNE (quality_locked=1) → automat ji už nepřepíše. Když ji nechá prázdnou,
-// zámek se zruší a kvalita se dopočítá z nového `release`.
-const _updateSubMeta = db.prepare(`
-  UPDATE subs SET group_name=@group_name, release=@release, lang=@lang,
-    quality=@quality, quality_locked=@quality_locked
-  WHERE sub_id=@sub_id
-`);
-export const updateSubMeta = (sub_id, { group_name, release, lang, quality }) =>
+const _updateSubMeta = db.prepare(
+  'UPDATE subs SET group_name=@group_name, release=@release, lang=@lang WHERE sub_id=@sub_id'
+);
+export const updateSubMeta = (sub_id, { group_name, release, lang }) =>
   _updateSubMeta.run({
     sub_id,
     group_name: group_name ?? null,
     release: release ?? null,
     lang: lang ?? null,
-    quality: quality ?? classifyQuality(release),
-    quality_locked: quality ? 1 : 0,
   }).changes;
 
 // --- runs ---
@@ -492,12 +478,12 @@ const _saveMachineSub = db.prepare(`
     (sub_id, hiyori_id, anilist_id, mal_id, anime_title, episode, lang, group_id,
      group_name, release, version, kind, url, extern_domain, added_date, first_seen,
      status, error, filename, local_path, file_bytes, r2_key, downloaded_at,
-     manual_add, machine_of, machine_source, quality)
+     manual_add, machine_of, machine_source, machine_ref)
   VALUES
     (@sub_id, @hiyori_id, @anilist_id, @mal_id, @anime_title, @episode, @lang, NULL,
      @group_name, @release, @version, 'machine', NULL, NULL, NULL, @first_seen,
      'downloaded', NULL, @filename, NULL, @file_bytes, @r2_key, @downloaded_at,
-     0, @machine_of, @machine_source, @quality)
+     0, @machine_of, @machine_source, @machine_ref)
 `);
 export function saveMachineSub(row) {
   const now = new Date().toISOString();
@@ -507,9 +493,8 @@ export function saveMachineSub(row) {
     machine_source: 'hiyori',
     group_name: null,
     version: null,
+    machine_ref: null,
     ...row,
-    // kvalita přečasu z jeho release („🤖 BD · EMBER" → BD, skupina EMBER)
-    quality: row.quality ?? classifyQuality(row.release),
   });
 }
 
@@ -567,7 +552,7 @@ function findAkiSubs({ anilist = null, mal = null, episode = null, lang = null }
   const epCond = episode != null ? ' AND episode=@episode' : '';
   const base =
     "SELECT akihabara_id AS sub_id, anilist_id, mal_id, anime_title, episode, lang, " +
-    "group_name, release, version, NULL AS quality, NULL AS kind, " +
+    "group_name, release, version, NULL AS kind, " +
     "COALESCE(extern_domain,'akihabara') AS extern_domain, filename, file_bytes, r2_key " +
     "FROM subs WHERE r2_key IS NOT NULL AND r2_key<>''";
   try {
@@ -594,7 +579,7 @@ export function findSubs({ anilist = null, mal = null, episode = null, lang = nu
   const epCond = episode != null ? ' AND episode=@episode' : '';
   const base =
     "SELECT sub_id, anilist_id, mal_id, anime_title, episode, lang, group_name, " +
-    "release, version, quality, kind, extern_domain, filename, file_bytes, r2_key " +
+    "release, version, kind, extern_domain, filename, file_bytes, r2_key " +
     "FROM subs WHERE status='downloaded' AND r2_key IS NOT NULL AND r2_key<>''";
 
   // akihabara titulky pro tentýž dotaz (přidají se ZA hiyori)
@@ -692,20 +677,14 @@ export function allSubs() {
 
 // "Dnes přidané" pro addon: stažené titulky (na R2) podle first_seen.
 // Seskupeno PO ANIME. Každé anime má episodes[] = [{episode, langs[]}], řazeno.
-// Nedávno přidané titulky, seskupené po anime.
-//  sinceIso = null → bez časového omezení (všechna anime)
-//  limit    = null → bez omezení počtu anime
-// Anime jsou řazená podle času posledního přidaného titulku (nejnovější první),
-// záznamy bez first_seen jdou na konec. Bere jen stažené, co reálně leží na R2.
-export function recentlyAdded(sinceIso = null, limit = null) {
+export function recentlyAdded(sinceIso) {
   const rows = db
     .prepare(
       "SELECT anilist_id, mal_id, anime_title, episode, lang, added_date, first_seen " +
       "FROM subs WHERE status='downloaded' AND r2_key IS NOT NULL AND r2_key<>'' " +
-      (sinceIso ? 'AND first_seen >= @since ' : '') +
-      'ORDER BY (first_seen IS NULL), first_seen DESC'
+      "AND first_seen >= ? ORDER BY first_seen DESC"
     )
-    .all(sinceIso ? { since: sinceIso } : {});
+    .all(sinceIso);
 
   // seskup podle anime (anilist|mal), uvnitř podle epizody s jazyky
   const anime = new Map();
@@ -726,14 +705,13 @@ export function recentlyAdded(sinceIso = null, limit = null) {
   }
 
   // finalizace: episodes jako seřazené pole objektů {episode, langs}
-  const out = [...anime.values()].map((a) => {
+  return [...anime.values()].map((a) => {
     const episodes = [...a._eps.entries()]
       .map(([episode, langs]) => ({ episode, langs: [...langs].sort() }))
       .sort((x, y) => x.episode - y.episode);
     const { _eps, ...rest } = a;
     return { ...rest, episodes };
   });
-  return limit ? out.slice(0, limit) : out;
 }
 // Přehled dostupnosti pro addon. episodes = pole objektů s rozpadem variant.
 // Vrací {matchedBy, anime_title, episodes_count, subs_total, langs, episodes} — nebo total 0.
@@ -927,7 +905,10 @@ export function getAkiSub(akihabaraId) {
 
 // Cíle HROMADNÉHO přečasu (hlavní subs): stažené díly daného anime, které JEŠTĚ
 // nemají strojovou verzi. Vrací [{sub_id, episode}] seřazené dle dílu.
-export function bulkBdTargetsHiyori(anilistId, malId) {
+const needsResync = (m, pinHash) =>
+  !m || (pinHash && String(m.machine_ref || '').toLowerCase() !== String(pinHash).toLowerCase());
+
+export function bulkBdTargetsHiyori(anilistId, malId, pinHash = null) {
   const rows = db
     .prepare(
       "SELECT sub_id, episode FROM subs " +
@@ -938,20 +919,21 @@ export function bulkBdTargetsHiyori(anilistId, malId) {
     )
     .all({ anilist: anilistId ?? null, mal: malId ?? null });
   const machines = machineVersionsFor(rows.map((r) => r.sub_id), 'hiyori');
-  return rows.filter((r) => !machines[r.sub_id]).map((r) => ({ sub_id: r.sub_id, episode: r.episode }));
+  return rows.filter((r) => needsResync(machines[r.sub_id], pinHash))
+    .map((r) => ({ sub_id: r.sub_id, episode: r.episode, redo: !!machines[r.sub_id] }));
 }
 
 // Cíle HROMADNÉHO přečasu (archiv akihabara) dle anilist_id: díly s r2_key bez
 // strojové verze (machine_source='akihabara'). Vrací [{sub_id=akihabara_id, episode}].
-export function bulkBdTargetsAki(anilistId) {
+export function bulkBdTargetsAki(anilistId, pinHash = null) {
   if (!akiDb) return [];
   const rows = akiDb
     .prepare("SELECT akihabara_id, episode FROM subs WHERE anilist_id=? AND r2_key IS NOT NULL ORDER BY episode")
     .all(Number(anilistId));
   const machines = machineVersionsFor(rows.map((r) => r.akihabara_id), 'akihabara');
   return rows
-    .filter((r) => !machines[r.akihabara_id])
-    .map((r) => ({ sub_id: r.akihabara_id, episode: r.episode }));
+    .filter((r) => needsResync(machines[r.akihabara_id], pinHash))
+    .map((r) => ({ sub_id: r.akihabara_id, episode: r.episode, redo: !!machines[r.akihabara_id] }));
 }
 
 // Souhrn archivu pro hlavičku sekce (počet titulků + anime).
