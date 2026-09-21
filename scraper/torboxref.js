@@ -18,18 +18,27 @@ let apiCalls = 0;                                   // počítadlo pro diagnosti
 export const torboxApiCalls = () => apiCalls;
 
 async function tb(p, opts = {}) {
-  const waits = [2000, 5000, 10000];                // při „too many requests" počkej a zkus znovu
+  // Opakuj při limitu (429) i při DOČASNÝCH chybách TorBoxu — ověřeno 21.9.:
+  // „There was an error processing your request. Please try again later."
+  // a výpadky, které po chvíli samy odezní.
+  const waits = [2000, 5000, 10000];
+  const TRANSIENT = /rate.?limit|too many|try again|error processing|temporar|unavailable|timeout/i;
   for (let attempt = 0; ; attempt++) {
     apiCalls++;
-    const r = await fetch(CONFIG.torbox.api + p, {
-      ...opts,
-      headers: { Authorization: `Bearer ${CONFIG.torbox.key}`, ...(opts.headers || {}) },
-      signal: AbortSignal.timeout(20000),
-    });
-    const j = await r.json().catch(() => ({}));
-    const limited = r.status === 429 || /rate.?limit|too many/i.test(String(j.detail || j.error || ''));
-    if (limited && attempt < waits.length) { await sleep(waits[attempt]); continue; }
-    if (j.success === false || limited) throw new Error(`TorBox ${p.split('?')[0]}: ${j.detail || j.error || r.status}`);
+    let r = null, j = {}, netErr = null;
+    try {
+      r = await fetch(CONFIG.torbox.api + p, {
+        ...opts,
+        headers: { Authorization: `Bearer ${CONFIG.torbox.key}`, ...(opts.headers || {}) },
+        signal: AbortSignal.timeout(20000),
+      });
+      j = await r.json().catch(() => ({}));
+    } catch (e) { netErr = e; }
+    const msg = String(j.detail || j.error || (netErr && netErr.message) || '');
+    const transient = !!netErr || (r && (r.status === 429 || r.status >= 500)) || (j.success === false && TRANSIENT.test(msg));
+    if (transient && attempt < waits.length) { await sleep(waits[attempt]); continue; }
+    if (netErr) throw new Error(`TorBox ${p.split('?')[0]}: ${netErr.message}`);
+    if (j.success === false || (r && r.status >= 400)) throw new Error(`TorBox ${p.split('?')[0]}: ${msg || r.status}`);
     return j;
   }
 }
@@ -134,9 +143,10 @@ async function filesOf(e) {
   return [];
 }
 
-async function linkFor(tid, fid) {
+async function linkFor(tid, fid, fresh = false) {
   const k = `${tid}:${fid}`, m = links.get(k);
-  if (m && Date.now() - m.t < TTL.link) return m.url;
+  if (fresh) links.delete(k);
+  else if (m && Date.now() - m.t < TTL.link) return m.url;
   const dl = await tb(`/torrents/requestdl?token=${CONFIG.torbox.key}&torrent_id=${tid}&file_id=${fid}`);
   if (dl.data) links.set(k, { url: dl.data, t: Date.now() });
   return dl.data || null;
@@ -186,7 +196,8 @@ export async function episodeLink(target, { assumeCached = false } = {}) {
 
   const url = await linkFor(e.tid, pick.id);
   if (!url) return { reason: 'no-file', skip: 'TorBox nevrátil odkaz na soubor', cleanup: noop };
-  return { url, file: pick.short_name || pick.name, how, total: mkv.length, cleanup: noop };
+  const refresh = () => linkFor(e.tid, pick.id, true);   // při chybě CDN: nový odkaz
+  return { url, file: pick.short_name || pick.name, how, total: mkv.length, cleanup: noop, refresh };
 }
 
 // ── MKV: hlavička + Tracks + Cues přes HTTP range ──────────────────────────
@@ -226,17 +237,37 @@ function* kids(buf, s, e) {
  * Časová osa titulkových stop z indexu Cues.
  * @returns {Promise<{tracks:Array<{num,codec,lang,name,cues:Array<{t,d}>}>, scale:number, bytes:number, noCues?:boolean}>}
  */
-export async function readTimeline(url) {
+export async function readTimeline(url, { refresh = null } = {}) {
   let bytes = 0;
+  let current = url, refreshed = false;
+  // CDN TorBoxu občas vrátí chybu u jinak platného souboru (ověřeno 21.9.:
+  // 400 → za chvíli 206). Při chybě: počkej a zkus znovu; pak si vyžádej NOVÝ
+  // odkaz a zkus ještě jednou. 200 (server range neumí) se NEopakuje — nikdy
+  // nestahuj celé video.
   async function range(s, e) {
-    const r = await fetch(url, { headers: { Range: `bytes=${s}-${e}` }, redirect: 'follow', signal: AbortSignal.timeout(30000) });
-    if (r.status !== 206) {            // server range neumí → NIKDY nestahuj celé video
-      try { await r.body?.cancel(); } catch {}
-      throw new Error(`server nevrátil 206 (vrátil ${r.status})`);
+    const retryable = (st) => st === 400 || st === 403 || st === 404 || st === 408 || st === 410 || st === 429 || st >= 500;
+    let lastStatus = null;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      let r = null;
+      try {
+        r = await fetch(current, { headers: { Range: `bytes=${s}-${e}` }, redirect: 'follow', signal: AbortSignal.timeout(30000) });
+      } catch (err) { lastStatus = err.message; }
+      if (r && r.status === 206) {
+        const b = Buffer.from(await r.arrayBuffer());
+        bytes += b.length;
+        return b;
+      }
+      if (r) {
+        try { await r.body?.cancel(); } catch {}
+        lastStatus = r.status;
+        if (!retryable(r.status)) break;                 // např. 200 = range nepodporuje → konec
+      }
+      if (attempt === 1 && refresh && !refreshed) {      // 2× selhal stejný odkaz → nový
+        try { const u = await refresh(); if (u) { current = u; refreshed = true; continue; } } catch {}
+      }
+      await sleep(attempt === 0 ? 1500 : 4000);
     }
-    const b = Buffer.from(await r.arrayBuffer());
-    bytes += b.length;
-    return b;
+    throw new Error(`server nevrátil 206 (vrátil ${lastStatus} pro bytes=${s}-${e}${refreshed ? ', i s novým odkazem' : ''})`);
   }
   async function at(abs, max) {
     const h = await range(abs, abs + 15);

@@ -566,7 +566,7 @@ export async function bdResync(sub, source = 'hiyori') {
         return null;
       }
       try {
-        const tl = await readTimeline(L.url);
+        const tl = await readTimeline(L.url, { refresh: L.refresh });
         if (tl.noCues) { why.noCues++; return null; }
         const pk = pickDialogueTrack(tl.tracks);
         if (!pk.track) {
