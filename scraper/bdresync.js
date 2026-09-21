@@ -211,6 +211,7 @@ function rankReleases(rels, prefAtId = null) {
   return [...rels].sort(
     (a, b) =>
       (a.kind === '🤖 BD' ? 0 : 1) - (b.kind === '🤖 BD' ? 0 : 1) ||   // BD před DVD (DVD = záloha)
+      (a.remux ? 1 : 0) - (b.remux ? 1 : 0) ||                         // remux až nakonec (bývá jen PGS)
       b.seeders - a.seeders ||                                         // ROZHODUJE: víc seedů
       (Number(b.at_id) === Number(prefAtId) ? 1 : 0) -                 // při shodě: osvědčený
         (Number(a.at_id) === Number(prefAtId) ? 1 : 0) ||
@@ -289,6 +290,7 @@ async function indexerReleases(sub) {
       name: t.name || '',
       seeders: Number(t.seeders) || 0,
       kind: DVD_RE.test(vs) && !BD_RE.test(vs) ? '🤖 DVD' : '🤖 BD',
+      remux: /remux/i.test(vs),                           // disk-remux = obvykle jen PGS
       targetCrc32: tf.crc32 ? String(tf.crc32).toLowerCase() : null,
       targetFilename: tf.filename || null,
       targetFilesize: (tf.filesize ?? tf.size) || null,
@@ -593,10 +595,10 @@ export async function bdResync(sub, source = 'hiyori') {
     const groups = [inCache.filter((r) => r.kind !== '🤖 DVD'), inCache.filter((r) => r.kind === '🤖 DVD')];
     for (const group of groups) {
       if (!group.length) continue;
-      // 1) prozkoumej nejvýš 3 cached releasy; anglická ASS (úroveň 1) ukončí hledání
+      // 1) prozkoumej nejvýš probeMax (6) cached releasů; anglická ASS (úroveň 1) ukončí hledání
       const probes = [];
       let idx = 0;
-      while (idx < group.length && probes.length < 3) {
+      while (idx < group.length && probes.length < (CONFIG.torbox.probeMax || 6)) {
         const p = await probe(group[idx++]);
         if (p) { probes.push(p); if (p.pk.tier === 1) break; }
       }
