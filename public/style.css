@@ -288,9 +288,33 @@ td.stav .odkaz { margin-top: 4px; }
   td.grprel .g, td.grprel .r { display: inline; }
   td.grprel .r { margin-top: 0; }
   td.grprel .r::before { content: " · "; color: var(--muted); }
-  td.srcq > div { display: inline-block; }
+  td.grprel .g:empty + .r::before { content: none; }
+  td.srcq > div { display: inline-block; vertical-align: middle; }
+  /* pevná šířka slotu zdroje → odznak kvality začíná vždy na stejném místě */
+  td.srcq > div:first-child { width: 158px; }
   td.srcq > div + div { margin: 0 0 0 4px; }
   td.stav { white-space: nowrap; }
   td.stav > div { display: inline; }
   td.stav .odkaz { margin: 0 0 0 8px; }
 }
+
+/* Smazat jen přečas (v řádku přečasu) — malé decentní tlačítko */
+button.del-machine {
+  background: transparent; border: 1px solid #a03434; color: #ff5c5c;
+  border-radius: 6px; padding: 1px 8px; cursor: pointer; font-size: 12px; line-height: 1.4; margin-left: 4px;
+}
+button.del-machine:hover { background: rgba(255,60,60,.18); border-color: #ff5c5c; }
+button.del-machine:disabled { opacity: .4; cursor: default; }
+
+/* Požadavky na přidání anime */
+#requestsTable { width: 100%; border-collapse: collapse; }
+#requestsTable th, #requestsTable td { padding: 6px 10px; text-align: left; border-bottom: 1px solid #2a2a2a; }
+.req-actions { white-space: nowrap; text-align: right; }
+button.req-approve, button.req-reject {
+  border-radius: 6px; padding: 3px 10px; cursor: pointer; font-size: 13px; margin-left: 6px;
+  background: transparent; border: 1px solid #3a6c4a; color: #6fdc8c;
+}
+button.req-approve:hover { background: rgba(80,220,120,.15); border-color: #6fdc8c; }
+button.req-reject { border-color: #a03434; color: #ff5c5c; }
+button.req-reject:hover { background: rgba(255,60,60,.15); border-color: #ff5c5c; }
+button.req-approve:disabled, button.req-reject:disabled { opacity: .5; cursor: default; }
