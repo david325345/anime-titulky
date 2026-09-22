@@ -21,6 +21,15 @@ function fmtDate(iso) {
   if (isNaN(d)) return esc(iso);
   return d.toLocaleString('cs-CZ', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
+// datum nad časem (jen do tabulky titulků — šetří šířku)
+function fmtDateStacked(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (isNaN(d)) return esc(iso);
+  const den = d.toLocaleDateString('cs-CZ', { day: '2-digit', month: '2-digit' });
+  const cas = d.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' });
+  return `${den}<br><span class="cas">${cas}</span>`;
+}
 function dur(a, b) {
   if (!a || !b) return '—';
   const s = Math.round((new Date(b) - new Date(a)) / 1000);
@@ -36,7 +45,7 @@ function qualityCell(s) {
 }
 
 function statusCell(sub) {
-  const label = { downloaded: 'staženo', new: 'čeká', not_downloaded: 'evidováno', pending_extern: 'extern (čeká na parser)', failed: 'chyba' }[sub.status] || sub.status;
+  const label = { downloaded: 'staženo', new: 'čeká', not_downloaded: 'evidováno', pending_extern: 'čeká na parser', failed: 'chyba' }[sub.status] || sub.status;
   const t = sub.error ? ` title="${esc(sub.error)}"` : '';
   return `<span class="st-${sub.status}"${t}>${esc(label)}</span>`;
 }
@@ -66,7 +75,7 @@ function renderSubs(subs) {
     const lang = s.lang ? `<span class="pill lang-${esc(s.lang)}">${esc(s.lang)}</span>` : '';
     const src = s.kind === 'direct'
       ? `<span class="pill src-direct">hiyori</span>`
-      : `<span class="pill src-extern">${esc(s.extern_domain || 'extern')}</span>`;
+      : `<span class="pill src-extern" title="${esc(s.extern_domain || 'extern')}">${esc(s.extern_domain || 'extern')}</span>`;
     const isHanabi = s.extern_domain === 'hanabi.fan';
     const hanabiBtn = (isHanabi && s.status !== 'downloaded')
       ? `<button class="hanabi-link" data-id="${s.sub_id}" data-ep="${s.episode ?? ''}" title="Vložit odkaz na ZIP z hanabi (img.hanabi.fan)">🔗 odkaz</button>`
@@ -86,22 +95,18 @@ function renderSubs(subs) {
       : '';
     const onR2 = s.r2_key
       ? `<span class="pill r2-yes" title="${esc(s.r2_key)}">✓</span>`
-      : `<span class="r2-no">—</span>`;
+      : ''; // nestažené: stav to říká sám, „—" jen zbytečně zalamovalo buňku
     return `<tr>
-      <td class="muted nowrap">${fmtDate(s.first_seen)}</td>
+      <td class="muted nowrap kdy">${fmtDateStacked(s.first_seen)}</td>
       <td class="anime">${anime}</td>
       <td class="nowrap">${s.episode ?? '—'}</td>
       <td class="nowrap">${lang}</td>
-      <td class="group">${esc(s.group_name || '')}</td>
-      <td class="release">${esc(s.release || '')}</td>
-      <td class="nowrap">${src}</td>
-      <td class="nowrap">${qualityCell(s)}</td>
-      <td class="nowrap">${statusCell(s)}</td>
-      <td class="nowrap">${onR2}</td>
-      <td class="nowrap">${dl}</td>
-      <td class="nowrap">${(s.status === 'downloaded' && s.r2_key) ? `<button class="bd-resync" data-id="${s.sub_id}" data-source="hiyori" title="Přečasovat na BD časování (BD auto)">⏱</button>` : ''}${s.machine ? `<button class="machine-toggle" data-id="${s.sub_id}" title="Zobrazit strojovou verzi (BD auto)">přečas ▸</button>` : ''}${dlNowBtn}${uploadBtn}${canDelete ? `<button class="edit-sub" data-id="${s.sub_id}" data-group="${esc(s.group_name || '')}" data-release="${esc(s.release || '')}" data-lang="${esc(s.lang || '')}" data-quality="${esc(s.quality || '')}" title="Upravit fansub / release / jazyk / kvalitu">✏️</button>` : ''}${(canDelete && s.r2_key) ? `<button class="del-r2" data-id="${s.sub_id}" title="Smazat úplně (DB i soubor na R2)">🗑</button>` : ''}${(canDelete && !s.r2_key) ? `<button class="del-db" data-id="${s.sub_id}" title="Smazat z evidence (jen DB — žádný soubor na R2)">🗑</button>` : ''}${(canDelete && s.status === 'downloaded') ? `<button class="reset-sub" data-id="${s.sub_id}" title="Smazat soubor z R2 a vrátit mezi nestažené (pak jde nahrát správný přes 📤)">♻</button>` : ''}${s.unused_variants ? `<span class="unused-flag" title="Zdroj nabízel i další verzi, která se nepoužila: ${esc(s.unused_variants)} — můžeš ji doplnit ručně přes 📤">⚠️</span>` : ''}</td>
-    </tr>${s.machine ? `<tr class="machine-row" data-for="${s.sub_id}" hidden><td></td><td colspan="11" class="machine-cell"><span class="pill machine-pill">${esc(s.machine.release || '🤖 BD')}</span>${s.machine.quality ? ` <span class="pill ${s.machine.quality === 'BD' ? 'q-bd' : s.machine.quality === 'DVD' ? 'q-dvd' : 'q-web'}">${esc(s.machine.quality)}</span>` : ''} ${s.machine.version ? esc(s.machine.version) + ' · ' : ''}${((s.machine.file_bytes || 0) / 1024).toFixed(1)} KB · <a href="/api/file/${s.machine.sub_id}">stáhnout</a>${canDelete ? ` · <button class="del-machine" data-id="${s.machine.sub_id}" title="Smazat jen tento přečas (původní titulek zůstane)">🗑 smazat přečas</button>` : ''}</td></tr>` : ''}`;
-  }).join('') || `<tr><td colspan="11" class="muted">Nic nenalezeno.</td></tr>`;
+      <td class="grprel"><div class="g">${esc(s.group_name || '')}</div>${s.release ? `<div class="r">${esc(s.release)}</div>` : ''}</td>
+      <td class="srcq"><div>${src}</div><div>${qualityCell(s)}</div></td>
+      <td class="stav"><div class="nowrap">${statusCell(s)} ${onR2}</div>${dl ? `<div class="odkaz">${dl}</div>` : ''}</td>
+      <td class="actions"><div class="act">${(s.status === 'downloaded' && s.r2_key) ? `<button class="bd-resync" data-id="${s.sub_id}" data-source="hiyori" title="Přečasovat na BD časování (BD auto)">⏱</button>` : ''}${s.machine ? `<button class="machine-toggle" data-id="${s.sub_id}" title="Zobrazit strojovou verzi (BD auto)">přečas ▸</button>` : ''}${dlNowBtn}${uploadBtn}${canDelete ? `<button class="edit-sub" data-id="${s.sub_id}" data-group="${esc(s.group_name || '')}" data-release="${esc(s.release || '')}" data-lang="${esc(s.lang || '')}" data-quality="${esc(s.quality || '')}" title="Upravit fansub / release / jazyk / kvalitu">✏️</button>` : ''}${(canDelete && s.r2_key) ? `<button class="del-r2" data-id="${s.sub_id}" title="Smazat úplně (DB i soubor na R2)">🗑</button>` : ''}${(canDelete && !s.r2_key) ? `<button class="del-db" data-id="${s.sub_id}" title="Smazat z evidence (jen DB — žádný soubor na R2)">🗑</button>` : ''}${(canDelete && s.status === 'downloaded') ? `<button class="reset-sub" data-id="${s.sub_id}" title="Smazat soubor z R2 a vrátit mezi nestažené (pak jde nahrát správný přes 📤)">♻</button>` : ''}${s.unused_variants ? `<span class="unused-flag" title="Zdroj nabízel i další verzi, která se nepoužila: ${esc(s.unused_variants)} — můžeš ji doplnit ručně přes 📤">⚠️</span>` : ''}</div></td>
+    </tr>${s.machine ? `<tr class="machine-row" data-for="${s.sub_id}" hidden><td></td><td colspan="7" class="machine-cell"><span class="pill machine-pill">${esc(s.machine.release || '🤖 BD')}</span>${s.machine.quality ? ` <span class="pill ${s.machine.quality === 'BD' ? 'q-bd' : s.machine.quality === 'DVD' ? 'q-dvd' : 'q-web'}">${esc(s.machine.quality)}</span>` : ''} ${s.machine.version ? esc(s.machine.version) + ' · ' : ''}${((s.machine.file_bytes || 0) / 1024).toFixed(1)} KB · <a href="/api/file/${s.machine.sub_id}">stáhnout</a>${canDelete ? ` · <button class="del-machine" data-id="${s.machine.sub_id}" title="Smazat jen tento přečas (původní titulek zůstane)">🗑 smazat přečas</button>` : ''}</td></tr>` : ''}`;
+  }).join('') || `<tr><td colspan="8" class="muted">Nic nenalezeno.</td></tr>`;
 }
 
 function renderRuns(runs) {
