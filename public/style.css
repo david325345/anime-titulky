@@ -186,7 +186,7 @@ button.bd-resync:disabled { opacity: .5; cursor: default; }
 
 button.machine-toggle {
   background: transparent; border: 1px solid #3a5a44; color: #8fd8a8;
-  padding: 3px 8px; font-size: 12px; border-radius: 6px; cursor: pointer; margin-right: 4px;
+  padding: 3px 7px; font-size: 12px; font-weight: 500; line-height: 1.2; border-radius: 6px; cursor: pointer; margin-right: 4px;
 }
 button.machine-toggle:hover { background: rgba(90,200,140,.12); }
 
@@ -273,7 +273,7 @@ td.actions { min-width: 78px; }
 /* tlačítka jsou v šabloně bez mezer → bez flexu by se nezalomila a vyjela ven;
    šířka 70 px = dvě tlačítka vedle sebe */
 td.actions .act { display: flex; flex-wrap: wrap; gap: 3px; }
-td.actions .act > * { margin: 0; }
+td.actions .act > * { margin: 0; flex-shrink: 0; white-space: nowrap; } /* nesmršťovat → text se nezalomí */
 /* na širším okně tlačítka vždy v jednom řádku (jinak by jim místo vzal sloupec Anime) */
 @media (min-width: 1300px) { td.actions .act { flex-wrap: nowrap; } }
 td.kdy .cas { font-size: 12px; }
