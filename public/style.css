@@ -48,7 +48,7 @@ button:disabled { opacity: .5; cursor: default; }
 .edit-sub:disabled { opacity: .5; cursor: default; }
 .muted { color: var(--muted); }
 
-main { padding: 22px; max-width: 1200px; margin: 0 auto; }
+main { padding: 22px; max-width: 2200px; margin: 0 auto; }
 
 .cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; margin-bottom: 22px; }
 .card {
@@ -71,7 +71,7 @@ th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: upp
 td.nowrap, th.nowrap { white-space: nowrap; }
 /* overflow-wrap místo word-break: slovo se zlomí jen když se nevejde celé,
    takže sloupec se už nezmáčkne na šířku jednoho písmene */
-td.anime { min-width: 200px; max-width: 320px; overflow-wrap: break-word; }
+td.anime { min-width: 200px; overflow-wrap: break-word; }
 td.release { max-width: 200px; overflow-wrap: break-word; color: var(--muted); }
 td.group { max-width: 160px; overflow-wrap: break-word; }
 td a { color: var(--accent); text-decoration: none; }
@@ -272,8 +272,25 @@ td.srcq .pill.src-extern { display: inline-block; max-width: 150px; overflow: hi
 td.actions { min-width: 78px; }
 /* tlačítka jsou v šabloně bez mezer → bez flexu by se nezalomila a vyjela ven;
    šířka 70 px = dvě tlačítka vedle sebe */
-td.actions .act { display: flex; flex-wrap: wrap; gap: 3px; width: 70px; }
+td.actions .act { display: flex; flex-wrap: wrap; gap: 3px; }
 td.actions .act > * { margin: 0; }
+/* na širším okně tlačítka vždy v jednom řádku (jinak by jim místo vzal sloupec Anime) */
+@media (min-width: 1300px) { td.actions .act { flex-wrap: nowrap; } }
 td.kdy .cas { font-size: 12px; }
 #subsTable th, #subsTable td { padding-left: 7px; padding-right: 7px; }
 td.stav .odkaz { margin-top: 4px; }
+
+/* Široké okno: všechno z buňky vedle sebe → jeden titulek = jeden řádek */
+@media (min-width: 1600px) {
+  td.kdy br { display: none; }
+  td.kdy .cas { margin-left: 6px; }
+  td.grprel { max-width: none; white-space: nowrap; }
+  td.grprel .g, td.grprel .r { display: inline; }
+  td.grprel .r { margin-top: 0; }
+  td.grprel .r::before { content: " · "; color: var(--muted); }
+  td.srcq > div { display: inline-block; }
+  td.srcq > div + div { margin: 0 0 0 4px; }
+  td.stav { white-space: nowrap; }
+  td.stav > div { display: inline; }
+  td.stav .odkaz { margin: 0 0 0 8px; }
+}
