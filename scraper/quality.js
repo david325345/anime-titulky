@@ -34,8 +34,8 @@ const canonKey = (s) => ALIAS[normKey(s)] || normKey(s);
 
 // --- vzory ---
 const HASH    = /\[[0-9A-Fa-f]{8}\]/g;                 // CRC v názvu souboru
-const DVD_RE  = /\bdvd\b|\br2\s*dvd\b|720x480/i;
-const BD_RE   = /(^|[^a-z0-9])bd([^a-z0-9]|$)|\bbd-?rip\b|\bblu-?ray\b|\bremux\b/i;
+const DVD_RE  = /(^|[^a-z0-9])dvd|\br2\s*dvd\b|720x480/i;   // i „DVDrip“ / „_DVDrip“
+const BD_RE   = /(^|[^a-z0-9])bd([^a-z0-9]|$)|(^|[^a-z0-9])bd-?rip|(^|[^a-z0-9])bd\d{3,4}p|\bblu-?ray\b|\bremux\b/i;
 const JUNK_RE = /^(hns\.sk|webshare|\d+|ep\d+\s*-\s*fsp|\[720p\]|\[uncensored\])$/i;
 
 const QUAL    = /\b(\d{3,4}p|4k|720x480|hi10|10bit|8bit|x?26[45]|hevc|avc|aac\d?(\.\d)?|eac3|ac3|flac|multisub|multiple subtitle|dual-audio)\b/gi;
