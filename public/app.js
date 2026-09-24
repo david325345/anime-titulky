@@ -1079,6 +1079,16 @@ function bulkRelKey(s) {
     .replace(/\b(x?26[45]|hevc|avc|10bit|8bit|web-?dl|web-?rip|web|bd-?rip|bd|blu-?ray|dvd-?rip|dvd|remux)\b/gi, ' ')
     .toLowerCase().replace(/[^a-z0-9]/g, '');
 }
+// hezký zápis release do popisku — z názvu souboru nechá jen skupinu
+function bulkRelPopis(s) {
+  let t = String(s || '').trim();
+  t = t.replace(/\.(ass|srt|ssa|sub|vtt|mkv|mp4)$/i, '');
+  t = t.replace(/\[[0-9A-Fa-f]{8}\]/g, ' ');
+  const zavorka = t.match(/^\s*\[([^\]]+)\]/);
+  if (zavorka && /[a-z]/i.test(zavorka[1])) t = zavorka[1];
+  t = t.replace(/\s[-–]\s*\d{1,4}(v\d)?\b.*$/i, ' ');
+  return t.replace(/\s+/g, ' ').trim();
+}
 function bulkSetKey(r) {
   return [(r.lang || '').toUpperCase(), (r.group_name || '').trim().toLowerCase(), bulkRelKey(r.release)].join(' ¦ ');
 }
@@ -1091,13 +1101,15 @@ function bulkSetPopis(rows) {
   };
   const lang = rows[0]?.lang || '?';
   const grp = cetnost(rows.map((r) => r.group_name))[0] || '—';
-  const rels = cetnost(rows.map((r) => r.release));
+  const rels = cetnost(rows.map((r) => bulkRelPopis(r.release)).filter(Boolean));
   return { popis: `${lang} · ${grp} · ${rels[0] || '—'}`, varianty: rels.slice(1) };
 }
 function bulkSetLabel(key, rows) {
   const volnych = rows.filter((r) => !r.r2_key).length;
   const { popis, varianty } = bulkSetPopis(rows);
-  const navic = varianty.length ? `  [+ ${varianty.map((v) => `„${v}"`).join(', ')}]` : '';
+  const ukazat = varianty.slice(0, 2).map((v) => `„${v}"`).join(', ');
+  const zbytek = varianty.length > 2 ? ` a ${varianty.length - 2} dalších` : '';
+  const navic = varianty.length ? `  [+ ${ukazat}${zbytek}]` : '';
   return `${popis}  (${rows.length} dílů, ${volnych} bez souboru)${navic}`;
 }
 
