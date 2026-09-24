@@ -1076,7 +1076,7 @@ async function openBulkUpload(hiyoriId, anilistId) {
   const input = document.createElement('input');
   input.type = 'file';
   input.multiple = true;
-  input.accept = '.ass,.srt,.ssa';
+  input.accept = '.ass,.srt,.ssa,.zip';
   input.style.display = 'none';
   document.body.appendChild(input);
   const files = await new Promise((resolve) => {
@@ -1087,6 +1087,24 @@ async function openBulkUpload(hiyoriId, anilistId) {
   input.remove();
   if (!files.length) return;
 
+  // ZIP → obsah rozbalí server (prohlížeč to neumí)
+  const zipFile = (files.length === 1 && /\.zip$/i.test(files[0].name)) ? files[0] : null;
+  if (files.some((f) => /\.(rar|7z)$/i.test(f.name))) {
+    alert('RAR/7z zatím nejde — rozbal ho a nahraj soubory nebo ZIP.');
+    return;
+  }
+  let zipEntries = null;
+  if (zipFile) {
+    try {
+      const r = await (await fetch('/api/bulk-zip', {
+        method: 'POST', headers: { 'Content-Type': 'application/octet-stream' },
+        body: await zipFile.arrayBuffer(),
+      })).json();
+      if (r.error) throw new Error(r.error);
+      zipEntries = r.entries || [];
+    } catch (err) { alert('Archiv se nepodařilo načíst: ' + err.message); return; }
+  }
+
   // 2) záznamy anime + rozparsované názvy
   let subs = [], parsed = [];
   try {
@@ -1094,10 +1112,11 @@ async function openBulkUpload(hiyoriId, anilistId) {
     const a = await (await fetch(`/api/subs/by-anime?${q}`)).json();
     if (a.error) throw new Error(a.error);
     subs = a.subs || [];
+    const nazvy = zipEntries ? zipEntries.map((e) => e.name) : files.map((f) => f.name);
     const b = await (await fetch('/api/parse-names', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ names: files.map((f) => f.name), anilist_id: Number(anilistId) || undefined }),
+      body: JSON.stringify({ names: nazvy, anilist_id: Number(anilistId) || undefined }),
     })).json();
     if (b.error) throw new Error(b.error);
     parsed = b.results || [];
@@ -1116,14 +1135,16 @@ async function openBulkUpload(hiyoriId, anilistId) {
   if (!sady.size) { alert('K tomuhle anime nejsou žádné záznamy — nejdřív ho přidej přes „Ruční titulky".'); return; }
 
   const epByName = new Map(parsed.map((p) => [p.name, p.episode]));
-  const polozky = files.map((f) => ({ file: f, ep: epByName.get(f.name) ?? null }));
+  const polozky = zipEntries
+    ? zipEntries.map((e) => ({ name: e.name, entry: e.entry, file: null, ep: epByName.get(e.name) ?? null }))
+    : files.map((f) => ({ name: f.name, entry: null, file: f, ep: epByName.get(f.name) ?? null }));
 
   // 3) okno s náhledem
   const overlay = document.createElement('div');
   overlay.className = 'edit-modal-overlay';
   overlay.innerHTML = `
     <div class="edit-modal bulk-modal">
-      <h3>Hromadné nahrání — ${files.length} souborů</h3>
+      <h3>Hromadné nahrání — ${polozky.length} souborů${zipFile ? ' (ze ZIPu)' : ''}</h3>
       <label>Sada, do které se nahraje
         <select id="bulk-set">
           ${[...sady.entries()].map(([k, rows], i) =>
@@ -1157,7 +1178,7 @@ async function openBulkUpload(hiyoriId, anilistId) {
       it.cil = (zaznam && !zaznam.r2_key) ? zaznam.sub_id : null;
       return `<div class="bulk-row ${cls}">
         <input type="number" min="1" class="bulk-ep" data-i="${i}" value="${it.ep ?? ''}" placeholder="?" />
-        <span class="bulk-name" title="${esc(it.file.name)}">${esc(it.file.name)}</span>
+        <span class="bulk-name" title="${esc(it.name)}">${esc(it.name)}</span>
         <span class="bulk-stav">${esc(stav)}</span>
       </div>`;
     }).join('');
@@ -1183,16 +1204,39 @@ async function openBulkUpload(hiyoriId, anilistId) {
     tlacitko.disabled = true;
     sel.disabled = true;
     let hotovo = 0, chyb = 0;
-    for (const it of kNahrani) {
-      tlacitko.textContent = `Nahrávám ${hotovo + chyb + 1}/${kNahrani.length}…`;
+
+    if (zipFile) {
+      tlacitko.textContent = `Nahrávám ${kNahrani.length} souborů…`;
       try {
-        const buf = await it.file.arrayBuffer();
-        const r = await (await fetch(
-          `/api/upload-sub?sub_id=${it.cil}&filename=${encodeURIComponent(it.file.name)}`,
-          { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: buf }
-        )).json();
-        if (r.error) { chyb++; console.error(it.file.name, r.error); } else hotovo++;
-      } catch (err) { chyb++; console.error(it.file.name, err); }
+        const zip_b64 = await new Promise((resolve, reject) => {
+          const fr = new FileReader();
+          fr.onload = () => resolve(String(fr.result).split(',')[1]);
+          fr.onerror = () => reject(new Error('Nepodařilo se načíst archiv.'));
+          fr.readAsDataURL(zipFile);
+        });
+        const map = {};
+        for (const it of kNahrani) map[it.entry] = it.cil;
+        const r = await (await fetch('/api/bulk-zip-commit', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ zip_b64, map }),
+        })).json();
+        if (r.error) throw new Error(r.error);
+        hotovo = r.uploaded || 0;
+        chyb = (r.errors || []).length;
+        (r.errors || []).forEach((x) => console.error(x.entry, x.error));
+      } catch (err) { chyb = kNahrani.length; console.error(err); }
+    } else {
+      for (const it of kNahrani) {
+        tlacitko.textContent = `Nahrávám ${hotovo + chyb + 1}/${kNahrani.length}…`;
+        try {
+          const buf = await it.file.arrayBuffer();
+          const r = await (await fetch(
+            `/api/upload-sub?sub_id=${it.cil}&filename=${encodeURIComponent(it.name)}`,
+            { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: buf }
+          )).json();
+          if (r.error) { chyb++; console.error(it.name, r.error); } else hotovo++;
+        } catch (err) { chyb++; console.error(it.name, err); }
+      }
     }
     zavri();
     loadSubs(); loadOverview();

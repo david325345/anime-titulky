@@ -331,4 +331,9 @@ button.req-approve:disabled, button.req-reject:disabled { opacity: .5; cursor: d
 .bulk-row.warn .bulk-stav { color: #e0b457; }
 .bulk-row.skip { opacity: .6; }
 .bulk-row .bulk-ep { width: 100%; padding: 3px 6px; border-radius: 6px; font-size: 13px; }
-button.bulk-upload { margin-left: 0; }
+button.bulk-upload {
+  background: transparent; border: 1px solid #4a6cc7; color: #9ab6ff;
+  border-radius: 6px; padding: 2px 8px; cursor: pointer; font-size: 13px; line-height: 1;
+}
+button.bulk-upload:hover { background: rgba(120,160,255,.16); border-color: #7f9fe0; }
+button.bulk-upload:disabled { opacity: .4; cursor: default; }
