@@ -318,3 +318,17 @@ button.req-approve:hover { background: rgba(80,220,120,.15); border-color: #6fdc
 button.req-reject { border-color: #a03434; color: #ff5c5c; }
 button.req-reject:hover { background: rgba(255,60,60,.15); border-color: #ff5c5c; }
 button.req-approve:disabled, button.req-reject:disabled { opacity: .5; cursor: default; }
+
+/* Hromadné nahrání titulků (📦) */
+.edit-modal.bulk-modal { width: 720px; max-width: 94vw; }
+.bulk-preview { max-height: 46vh; overflow-y: auto; margin: 12px 0; border: 1px solid #2a2a2a; border-radius: 8px; }
+.bulk-row { display: grid; grid-template-columns: 74px 1fr 230px; gap: 8px; align-items: center;
+  padding: 5px 8px; border-bottom: 1px solid #222; font-size: 13px; }
+.bulk-row:last-child { border-bottom: none; }
+.bulk-row .bulk-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.bulk-row .bulk-stav { color: var(--muted); font-size: 12px; }
+.bulk-row.ok   .bulk-stav { color: #86d5ac; }
+.bulk-row.warn .bulk-stav { color: #e0b457; }
+.bulk-row.skip { opacity: .6; }
+.bulk-row .bulk-ep { width: 100%; padding: 3px 6px; border-radius: 6px; font-size: 13px; }
+button.bulk-upload { margin-left: 0; }

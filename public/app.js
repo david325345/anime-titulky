@@ -87,7 +87,8 @@ function renderSubs(subs) {
           : (s.kind === 'extern' ? `<a href="${esc(s.url)}" target="_blank">otevřít</a>` : ''));
     // ruční nahrání titulku (jen u nestažených)
     const uploadBtn = s.status !== 'downloaded'
-      ? `<button class="upload-sub" data-id="${s.sub_id}" title="Nahrát titulek ručně (.ass/.srt/.zip)">📤</button>`
+      ? `<button class="upload-sub" data-id="${s.sub_id}" title="Nahrát titulek ručně (.ass/.srt/.zip)">📤</button>` +
+        `<button class="bulk-upload" data-hiyori="${s.hiyori_id || ''}" data-anilist="${s.anilist_id || ''}" data-id="${s.sub_id}" title="Hromadně nahrát balík titulků — díly se rozpoznají z názvů souborů">📦</button>`
       : '';
     // stáhnout právě tenhle záznam teď (jen u nestažených, ne u ručních — ty čekají na 📤)
     const dlNowBtn = (s.status !== 'downloaded' && s.kind !== 'manual')
@@ -699,6 +700,13 @@ $('#subsTable').addEventListener('click', async (e) => {
   if (ed) { openEditModal(ed); return; }
 
   // ruční nahrání titulku — otevři file dialog
+  // hromadné nahrání balíku titulků — díl se pozná z názvu souboru (parser indexeru)
+  const bulk = e.target.closest('button.bulk-upload');
+  if (bulk) {
+    openBulkUpload(bulk.dataset.hiyori, bulk.dataset.anilist);
+    return;
+  }
+
   const up = e.target.closest('button.upload-sub');
   if (up) {
     const id = up.dataset.id;
@@ -1045,3 +1053,149 @@ $('#akiNextBtn').addEventListener('click', () => { akiPage++; akiExpanded.clear(
 loadRole().then(load);
 loadAkihabara();
 setInterval(loadOverview, 5000); // auto-refresh jen souhrn (netrhá stránkování/hledání)
+
+
+// ==================================================================
+// HROMADNÉ NAHRÁNÍ TITULKŮ (📦)
+// Soubory se páruje na už založené prázdné díly: číslo dílu přečte parser
+// indexeru z názvu souboru, vše ostatní (jazyk, skupina, release) zůstává
+// z hiyori. Nic se nezakládá — co nemá svůj záznam, přeskočí se.
+// ==================================================================
+function bulkSetKey(r) {
+  return [r.lang || '', r.group_name || '', r.release || ''].join(' ¦ ');
+}
+function bulkSetLabel(key, rows) {
+  const [lang, grp, rel] = key.split(' ¦ ');
+  const volnych = rows.filter((r) => !r.r2_key).length;
+  const popis = [lang || '?', grp || '—', rel || '—'].join(' · ');
+  return `${popis}  (${rows.length} dílů, ${volnych} bez souboru)`;
+}
+
+async function openBulkUpload(hiyoriId, anilistId) {
+  // 1) soubory
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.multiple = true;
+  input.accept = '.ass,.srt,.ssa';
+  input.style.display = 'none';
+  document.body.appendChild(input);
+  const files = await new Promise((resolve) => {
+    input.onchange = () => resolve([...input.files]);
+    input.oncancel = () => resolve([]);
+    input.click();
+  });
+  input.remove();
+  if (!files.length) return;
+
+  // 2) záznamy anime + rozparsované názvy
+  let subs = [], parsed = [];
+  try {
+    const q = hiyoriId ? `hiyori_id=${hiyoriId}` : `anilist_id=${anilistId}`;
+    const a = await (await fetch(`/api/subs/by-anime?${q}`)).json();
+    if (a.error) throw new Error(a.error);
+    subs = a.subs || [];
+    const b = await (await fetch('/api/parse-names', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ names: files.map((f) => f.name), anilist_id: Number(anilistId) || undefined }),
+    })).json();
+    if (b.error) throw new Error(b.error);
+    parsed = b.results || [];
+  } catch (err) {
+    alert('Nepodařilo se připravit náhled: ' + err.message);
+    return;
+  }
+
+  // sady (jazyk · skupina · release) — do které se bude nahrávat
+  const sady = new Map();
+  for (const r of subs) {
+    const k = bulkSetKey(r);
+    if (!sady.has(k)) sady.set(k, []);
+    sady.get(k).push(r);
+  }
+  if (!sady.size) { alert('K tomuhle anime nejsou žádné záznamy — nejdřív ho přidej přes „Ruční titulky".'); return; }
+
+  const epByName = new Map(parsed.map((p) => [p.name, p.episode]));
+  const polozky = files.map((f) => ({ file: f, ep: epByName.get(f.name) ?? null }));
+
+  // 3) okno s náhledem
+  const overlay = document.createElement('div');
+  overlay.className = 'edit-modal-overlay';
+  overlay.innerHTML = `
+    <div class="edit-modal bulk-modal">
+      <h3>Hromadné nahrání — ${files.length} souborů</h3>
+      <label>Sada, do které se nahraje
+        <select id="bulk-set">
+          ${[...sady.entries()].map(([k, rows], i) =>
+            `<option value="${i}">${esc(bulkSetLabel(k, rows))}</option>`).join('')}
+        </select>
+      </label>
+      <div id="bulk-preview" class="bulk-preview"></div>
+      <div class="edit-modal-actions">
+        <button id="bulk-cancel">Zrušit</button>
+        <button id="bulk-go" class="primary">Nahrát</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  const klice = [...sady.keys()];
+  const sel = overlay.querySelector('#bulk-set');
+  const nahled = overlay.querySelector('#bulk-preview');
+  const tlacitko = overlay.querySelector('#bulk-go');
+
+  function prepocti() {
+    const rows = sady.get(klice[Number(sel.value)]) || [];
+    const podleDilu = new Map(rows.map((r) => [r.episode, r]));
+    let pujde = 0;
+    nahled.innerHTML = polozky.map((it, i) => {
+      const zaznam = it.ep != null ? podleDilu.get(it.ep) : null;
+      let stav, cls;
+      if (it.ep == null) { stav = 'díl nerozpoznán — doplň číslo'; cls = 'warn'; }
+      else if (!zaznam) { stav = `pro díl ${it.ep} tu není záznam — přeskočí se`; cls = 'warn'; }
+      else if (zaznam.r2_key) { stav = `díl ${it.ep} už má soubor — přeskočí se`; cls = 'skip'; }
+      else { stav = `→ doplní se do dílu ${it.ep}`; cls = 'ok'; pujde++; }
+      it.cil = (zaznam && !zaznam.r2_key) ? zaznam.sub_id : null;
+      return `<div class="bulk-row ${cls}">
+        <input type="number" min="1" class="bulk-ep" data-i="${i}" value="${it.ep ?? ''}" placeholder="?" />
+        <span class="bulk-name" title="${esc(it.file.name)}">${esc(it.file.name)}</span>
+        <span class="bulk-stav">${esc(stav)}</span>
+      </div>`;
+    }).join('');
+    tlacitko.textContent = pujde ? `Nahrát ${pujde} souborů` : 'Není co nahrát';
+    tlacitko.disabled = !pujde;
+    nahled.querySelectorAll('.bulk-ep').forEach((inp) => {
+      inp.onchange = () => {
+        const v = inp.value.trim();
+        polozky[Number(inp.dataset.i)].ep = v === '' ? null : Number(v);
+        prepocti();
+      };
+    });
+  }
+  sel.onchange = prepocti;
+  prepocti();
+
+  const zavri = () => overlay.remove();
+  overlay.querySelector('#bulk-cancel').onclick = zavri;
+  overlay.addEventListener('click', (ev) => { if (ev.target === overlay) zavri(); });
+
+  tlacitko.onclick = async () => {
+    const kNahrani = polozky.filter((it) => it.cil);
+    tlacitko.disabled = true;
+    sel.disabled = true;
+    let hotovo = 0, chyb = 0;
+    for (const it of kNahrani) {
+      tlacitko.textContent = `Nahrávám ${hotovo + chyb + 1}/${kNahrani.length}…`;
+      try {
+        const buf = await it.file.arrayBuffer();
+        const r = await (await fetch(
+          `/api/upload-sub?sub_id=${it.cil}&filename=${encodeURIComponent(it.file.name)}`,
+          { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: buf }
+        )).json();
+        if (r.error) { chyb++; console.error(it.file.name, r.error); } else hotovo++;
+      } catch (err) { chyb++; console.error(it.file.name, err); }
+    }
+    zavri();
+    loadSubs(); loadOverview();
+    if (chyb) alert(`Nahráno ${hotovo}, chyb ${chyb}. Podrobnosti v konzoli (F12).`);
+  };
+}
