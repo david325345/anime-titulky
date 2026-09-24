@@ -1061,14 +1061,36 @@ setInterval(loadOverview, 5000); // auto-refresh jen souhrn (netrhá stránková
 // indexeru z názvu souboru, vše ostatní (jazyk, skupina, release) zůstává
 // z hiyori. Nic se nezakládá — co nemá svůj záznam, přeskočí se.
 // ==================================================================
+// Release se u jednoho anime často zapíše různě („Subsplease" vs „subsplease 720p"),
+// takže se sady skládají podle NORMALIZOVANÉHO tvaru — bez velikosti písmen,
+// kvality a technických tagů. Jinak by se jedna sada zbytečně roztrhla na dvě.
+function bulkRelKey(s) {
+  return String(s || '')
+    .replace(/[([{][^)\]}]*[)\]}]/g, ' ')
+    .replace(/\b\d{3,4}p\b/gi, ' ')
+    .replace(/\b(x?26[45]|hevc|avc|10bit|8bit|web-?dl|web-?rip|web|bd-?rip|bd|blu-?ray|dvd-?rip|dvd|remux)\b/gi, ' ')
+    .toLowerCase().replace(/[^a-z0-9]/g, '');
+}
 function bulkSetKey(r) {
-  return [r.lang || '', r.group_name || '', r.release || ''].join(' ¦ ');
+  return [(r.lang || '').toUpperCase(), (r.group_name || '').trim().toLowerCase(), bulkRelKey(r.release)].join(' ¦ ');
+}
+// popis sady — bere se nejčastější zápis, ostatní se vypíšou jako varianty
+function bulkSetPopis(rows) {
+  const cetnost = (pole) => {
+    const m = new Map();
+    for (const v of pole) if (v) m.set(v, (m.get(v) || 0) + 1);
+    return [...m.entries()].sort((a, b) => b[1] - a[1]).map(([v]) => v);
+  };
+  const lang = rows[0]?.lang || '?';
+  const grp = cetnost(rows.map((r) => r.group_name))[0] || '—';
+  const rels = cetnost(rows.map((r) => r.release));
+  return { popis: `${lang} · ${grp} · ${rels[0] || '—'}`, varianty: rels.slice(1) };
 }
 function bulkSetLabel(key, rows) {
-  const [lang, grp, rel] = key.split(' ¦ ');
   const volnych = rows.filter((r) => !r.r2_key).length;
-  const popis = [lang || '?', grp || '—', rel || '—'].join(' · ');
-  return `${popis}  (${rows.length} dílů, ${volnych} bez souboru)`;
+  const { popis, varianty } = bulkSetPopis(rows);
+  const navic = varianty.length ? `  [+ ${varianty.map((v) => `„${v}"`).join(', ')}]` : '';
+  return `${popis}  (${rows.length} dílů, ${volnych} bez souboru)${navic}`;
 }
 
 async function openBulkUpload(hiyoriId, anilistId, subId) {
@@ -1193,7 +1215,7 @@ async function openBulkUpload(hiyoriId, anilistId, subId) {
       else if (!zaznam) {
         const jinde = jindeDil.get(ep);
         stav = jinde
-          ? `díl ${ep} je v jiné sadě: ${jinde.k.split(' ¦ ').filter(Boolean).join(' · ')}${jinde.r.r2_key ? ' (už má soubor)' : ''}`
+          ? `díl ${ep} je v jiné sadě: ${bulkSetPopis(sady.get(jinde.k) || []).popis}${jinde.r.r2_key ? ' (už má soubor)' : ''}`
           : `pro díl ${ep} tu není záznam — přeskočí se`;
         cls = 'warn';
       }
