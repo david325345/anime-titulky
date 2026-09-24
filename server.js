@@ -788,6 +788,62 @@ app.post('/api/hanabi-link', express.json(), async (req, res) => {
 
 // ruční nahrání titulku k existujícímu záznamu (.ass/.srt/.ssa/.zip)
 // soubor jde jako raw binary body, sub_id a filename v query
+// --- Hromadné nahrání ze ZIPu ---
+// Prohlížeč archiv rozbalit neumí, dělá to server. Dvě fáze: nejdřív výpis
+// obsahu (pro náhled), po potvrzení nahrání vybraných souborů.
+
+// 1) obsah archivu — jen titulkové soubory
+app.post('/api/bulk-zip', express.raw({ type: '*/*', limit: '50mb' }), (req, res) => {
+  if (!req.body || !req.body.length) return res.status(400).json({ error: 'Prázdný soubor.' });
+  let entries;
+  try {
+    entries = new AdmZip(req.body).getEntries()
+      .filter((e) => !e.isDirectory && /\.(ass|srt|ssa)$/i.test(e.entryName))
+      .map((e) => ({ entry: e.entryName, name: e.entryName.split('/').pop(), size: e.header.size }));
+  } catch (e) {
+    return res.status(400).json({ error: 'Archiv nejde otevřít (podporovaný je jen ZIP): ' + e.message });
+  }
+  if (!entries.length) return res.status(400).json({ error: 'V archivu nejsou .ass/.srt/.ssa soubory.' });
+  res.json({ entries });
+});
+
+// 2) nahrání: map = { "cesta/v/zipu.ass": sub_id }
+app.post('/api/bulk-zip-commit', express.json({ limit: '80mb' }), async (req, res) => {
+  const b64 = req.body?.zip_b64;
+  const map = req.body?.map;
+  if (!b64 || !map || typeof map !== 'object') return res.status(400).json({ error: 'Chybí archiv nebo přiřazení dílů.' });
+
+  let zip;
+  try { zip = new AdmZip(Buffer.from(b64, 'base64')); }
+  catch (e) { return res.status(400).json({ error: 'Archiv nejde otevřít: ' + e.message }); }
+
+  const chyby = [];
+  let nahrano = 0;
+  for (const [entryName, subIdRaw] of Object.entries(map)) {
+    const subId = Number(subIdRaw);
+    try {
+      const entry = zip.getEntry(entryName);
+      if (!entry) { chyby.push({ entry: entryName, error: 'v archivu nenalezeno' }); continue; }
+      const sub = getSub(subId);
+      if (!sub) { chyby.push({ entry: entryName, error: 'záznam nenalezen' }); continue; }
+      const name = entryName.split('/').pop();
+      const grp = sub.group_name || (name.match(/\[([^\]]+)\]/)?.[1]?.trim() ?? null);
+      const saved = await saveSubFile({ ...sub, group_name: grp }, entry.getData(), name);
+      markDownloaded({
+        sub_id: subId,
+        filename: saved.filename,
+        local_path: saved.local_path,
+        file_bytes: saved.file_bytes,
+        r2_key: saved.r2_key ?? null,
+      });
+      nahrano++;
+    } catch (e) {
+      chyby.push({ entry: entryName, error: e.message });
+    }
+  }
+  res.json({ ok: true, uploaded: nahrano, errors: chyby });
+});
+
 app.post('/api/upload-sub',
   express.raw({ type: '*/*', limit: '50mb' }),
   async (req, res) => {
