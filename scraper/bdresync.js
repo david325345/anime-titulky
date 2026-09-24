@@ -245,13 +245,21 @@ async function indexerReleases(sub) {
   const seasonQ = season != null ? `&season=${season}` : '';
 
   // /search primárně přes anilist/mal; u specialů bývá prázdné → zkus anidb
+  // Seedy se u indexeru načítají líně až po prvním dotazu, takže první odpověď
+  // má skoro vždy 0. Ptáme se proto opakovaně, dokud se seedy neobjeví
+  // (max ~13 s); když jich je fakt nula, vrátíme poslední výsledek.
   const fetchTosho = async (path) => {
-    const r1 = await indexerRequest(path).catch(() => null);
-    const t1 = (r1 && r1.json && r1.json.tosho_results) || [];
-    if (!t1.length) return [];
-    await new Promise((r) => setTimeout(r, 3000)); // seedy se načtou líně po 1. dotazu
-    const r2 = await indexerRequest(path).catch(() => null);
-    return (r2 && r2.json && r2.json.tosho_results) || t1;
+    const pauzy = [3000, 5000, 5000];
+    let posledni = [];
+    for (let pokus = 0; pokus <= pauzy.length; pokus++) {
+      const r = await indexerRequest(path).catch(() => null);
+      const ted = (r && r.json && r.json.tosho_results) || [];
+      if (!ted.length) return posledni;             // nic k dispozici → nečekat
+      posledni = ted;
+      if (ted.some((x) => Number(x.seeders) > 0)) return ted;   // seedy dorazily
+      if (pokus < pauzy.length) await new Promise((res) => setTimeout(res, pauzy[pokus]));
+    }
+    return posledni;
   };
   let queriedBy = idParam.split('=')[0];   // 'anilist' | 'mal'
   let tr = await fetchTosho(`/search?${idParam}${seasonQ}&episode=${sub.episode}`);
