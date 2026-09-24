@@ -703,7 +703,7 @@ $('#subsTable').addEventListener('click', async (e) => {
   // hromadné nahrání balíku titulků — díl se pozná z názvu souboru (parser indexeru)
   const bulk = e.target.closest('button.bulk-upload');
   if (bulk) {
-    openBulkUpload(bulk.dataset.hiyori, bulk.dataset.anilist);
+    openBulkUpload(bulk.dataset.hiyori, bulk.dataset.anilist, bulk.dataset.id);
     return;
   }
 
@@ -1071,7 +1071,7 @@ function bulkSetLabel(key, rows) {
   return `${popis}  (${rows.length} dílů, ${volnych} bez souboru)`;
 }
 
-async function openBulkUpload(hiyoriId, anilistId) {
+async function openBulkUpload(hiyoriId, anilistId, subId) {
   // 1) soubory
   const input = document.createElement('input');
   input.type = 'file';
@@ -1161,6 +1161,12 @@ async function openBulkUpload(hiyoriId, anilistId) {
 
   const klice = [...sady.keys()];
   const sel = overlay.querySelector('#bulk-set');
+  // předvybrat sadu toho řádku, u kterého se na 📦 kliklo
+  const kliknuty = subs.find((r) => String(r.sub_id) === String(subId));
+  if (kliknuty) {
+    const i = klice.indexOf(bulkSetKey(kliknuty));
+    if (i >= 0) sel.value = String(i);
+  }
   const nahled = overlay.querySelector('#bulk-preview');
   const tlacitko = overlay.querySelector('#bulk-go');
 
