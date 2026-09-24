@@ -314,6 +314,24 @@ export const markFailed = (sub_id, error) =>
 
 export const getSub = (id) => db.prepare('SELECT * FROM subs WHERE sub_id=?').get(id);
 
+// Všechny (nestrojové) záznamy jednoho anime — pro hromadné nahrání titulků,
+// kde se soubory párují na už založené prázdné díly.
+export function subsByAnime({ hiyori_id = null, anilist_id = null }) {
+  if (hiyori_id) {
+    return db.prepare(
+      'SELECT sub_id, episode, lang, group_name, release, status, r2_key, filename, anime_title' +
+      ' FROM subs WHERE hiyori_id=? AND machine_of IS NULL ORDER BY episode, lang, group_name'
+    ).all(Number(hiyori_id));
+  }
+  if (anilist_id) {
+    return db.prepare(
+      'SELECT sub_id, episode, lang, group_name, release, status, r2_key, filename, anime_title' +
+      ' FROM subs WHERE anilist_id=? AND machine_of IS NULL ORDER BY episode, lang, group_name'
+    ).all(Number(anilist_id));
+  }
+  return [];
+}
+
 // doplní release jen když je prázdný (nepřepisuje hodnotu z hiyori)
 const _setReleaseIfEmpty = db.prepare(
   "UPDATE subs SET release=@release, quality=CASE WHEN COALESCE(quality_locked,0)=1 THEN quality ELSE @quality END" +

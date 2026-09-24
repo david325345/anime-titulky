@@ -11,6 +11,7 @@ import {
   listAkihabaraAnime, akihabaraAnimeDetail, akihabaraStats, resetSubDownload,
   machineVersionsFor, getAkiSub, bulkBdTargetsHiyori, bulkBdTargetsAki, getBdPin, clearBdPin,
   insertRequest, listRequests, getRequest, setRequestStatus, requestStatusForAnilist,
+  subsByAnime,
   backfillQuality,
 } from './db.js';
 import { classifyQuality, releaseGroups } from './scraper/quality.js';
@@ -213,6 +214,38 @@ app.get('/api/all', (req, res) => {
 // Od tohoto bodu je vše CHRÁNĚNO Basic Auth (dashboard + admin)
 // ==================================================================
 app.use(basicAuth);
+
+// --- Hromadné nahrání titulků: parsing názvů + seznam záznamů anime ---
+
+// GET /api/subs/by-anime?hiyori_id=NNN — záznamy jednoho anime (pro párování
+// nahrávaných souborů na už založené díly).
+app.get('/api/subs/by-anime', (req, res) => {
+  const hiyori_id = Number(req.query.hiyori_id) || null;
+  const anilist_id = Number(req.query.anilist_id) || null;
+  if (!hiyori_id && !anilist_id) return res.status(400).json({ error: 'Zadej hiyori_id nebo anilist_id.' });
+  res.json({ subs: subsByAnime({ hiyori_id, anilist_id }) });
+});
+
+// POST /api/parse-names — přeposílá názvy souborů parseru indexeru (prohlížeč
+// na indexer nedosáhne). Vrací jeho odpověď beze změny. Používá se jen ke
+// zjištění čísla dílu; jazyk/skupinu/release bereme z hiyori.
+app.post('/api/parse-names', express.json({ limit: '2mb' }), async (req, res) => {
+  const names = Array.isArray(req.body?.names) ? req.body.names : null;
+  if (!names || !names.length) return res.status(400).json({ error: 'Chybí názvy souborů.' });
+  if (names.length > 500) return res.status(400).json({ error: 'Najednou nejvýš 500 souborů.' });
+  try {
+    const r = await fetch(`${CONFIG.indexer.url}/api/parse-names`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ names, anilist_id: Number(req.body?.anilist_id) || undefined }),
+    });
+    const j = await r.json();
+    if (!r.ok) return res.status(502).json({ error: j?.error || `Indexer vrátil ${r.status}.` });
+    res.json(j);
+  } catch (e) {
+    res.status(502).json({ error: 'Indexer nedostupný: ' + e.message });
+  }
+});
 
 // --- Požadavky na přidání anime — admin (za basicAuth) ---
 
