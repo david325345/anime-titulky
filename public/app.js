@@ -1065,7 +1065,15 @@ setInterval(loadOverview, 5000); // auto-refresh jen souhrn (netrhá stránková
 // takže se sady skládají podle NORMALIZOVANÉHO tvaru — bez velikosti písmen,
 // kvality a technických tagů. Jinak by se jedna sada zbytečně roztrhla na dvě.
 function bulkRelKey(s) {
-  return String(s || '')
+  let t = String(s || '').trim();
+  t = t.replace(/\.(ass|srt|ssa|sub|vtt|mkv|mp4)$/i, '');        // přípona
+  t = t.replace(/\[[0-9A-Fa-f]{8}\]/g, ' ');                     // CRC v názvu souboru
+  // do release se občas uloží celý název souboru („[SubsPlease] Něco - 01 (720p) [ABCD1234].ass“)
+  // → pak by měl každý díl jinou sadu; vezmeme z něj jen skupinu
+  const zavorka = t.match(/^\s*\[([^\]]+)\]/);
+  if (zavorka && /[a-z]/i.test(zavorka[1])) t = zavorka[1];
+  t = t.replace(/\s[-–]\s*\d{1,4}(v\d)?\b.*$/i, ' ');           // „ - 01 …“ a dál pryč
+  return t
     .replace(/[([{][^)\]}]*[)\]}]/g, ' ')
     .replace(/\b\d{3,4}p\b/gi, ' ')
     .replace(/\b(x?26[45]|hevc|avc|10bit|8bit|web-?dl|web-?rip|web|bd-?rip|bd|blu-?ray|dvd-?rip|dvd|remux)\b/gi, ' ')
