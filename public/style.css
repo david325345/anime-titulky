@@ -337,3 +337,8 @@ button.bulk-upload {
 }
 button.bulk-upload:hover { background: rgba(120,160,255,.16); border-color: #7f9fe0; }
 button.bulk-upload:disabled { opacity: .4; cursor: default; }
+.bulk-offset:empty { display: none; }
+.bulk-offset { display: flex; align-items: center; gap: 10px; margin-top: 10px; padding: 8px 10px;
+  border: 1px solid #55471f; background: rgba(224,180,87,.08); border-radius: 8px;
+  font-size: 13px; color: #e0b457; }
+.bulk-offset button { padding: 3px 10px; font-size: 13px; border-radius: 6px; }

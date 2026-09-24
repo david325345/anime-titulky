@@ -1135,9 +1135,12 @@ async function openBulkUpload(hiyoriId, anilistId, subId) {
   if (!sady.size) { alert('K tomuhle anime nejsou žádné záznamy — nejdřív ho přidej přes „Ruční titulky".'); return; }
 
   const epByName = new Map(parsed.map((p) => [p.name, p.episode]));
+  // epBase = co přečetl parser, epManual = ruční přepis (má přednost před posunem)
   const polozky = zipEntries
-    ? zipEntries.map((e) => ({ name: e.name, entry: e.entry, file: null, ep: epByName.get(e.name) ?? null }))
-    : files.map((f) => ({ name: f.name, entry: null, file: f, ep: epByName.get(f.name) ?? null }));
+    ? zipEntries.map((e) => ({ name: e.name, entry: e.entry, file: null, epBase: epByName.get(e.name) ?? null, epManual: null }))
+    : files.map((f) => ({ name: f.name, entry: null, file: f, epBase: epByName.get(f.name) ?? null, epManual: null }));
+  let posun = 0; // srovnání číslování (např. díly 13–24 → 1–12)
+  const dilPolozky = (it) => (it.epManual != null ? it.epManual : (it.epBase != null ? it.epBase + posun : null));
 
   // 3) okno s náhledem
   const overlay = document.createElement('div');
@@ -1151,6 +1154,7 @@ async function openBulkUpload(hiyoriId, anilistId, subId) {
             `<option value="${i}">${esc(bulkSetLabel(k, rows))}</option>`).join('')}
         </select>
       </label>
+      <div id="bulk-offset" class="bulk-offset"></div>
       <div id="bulk-preview" class="bulk-preview"></div>
       <div class="edit-modal-actions">
         <button id="bulk-cancel">Zrušit</button>
@@ -1168,32 +1172,66 @@ async function openBulkUpload(hiyoriId, anilistId, subId) {
     if (i >= 0) sel.value = String(i);
   }
   const nahled = overlay.querySelector('#bulk-preview');
+  const posunBox = overlay.querySelector('#bulk-offset');
   const tlacitko = overlay.querySelector('#bulk-go');
 
   function prepocti() {
     const rows = sady.get(klice[Number(sel.value)]) || [];
     const podleDilu = new Map(rows.map((r) => [r.episode, r]));
+    // kde který díl je, kdyby v téhle sadě nebyl (ať je vidět, že jde o jinou sadu)
+    const jindeDil = new Map();
+    for (const [k, rs] of sady) {
+      if (k === klice[Number(sel.value)]) continue;
+      for (const r of rs) if (!jindeDil.has(r.episode)) jindeDil.set(r.episode, { k, r });
+    }
     let pujde = 0;
     nahled.innerHTML = polozky.map((it, i) => {
-      const zaznam = it.ep != null ? podleDilu.get(it.ep) : null;
+      const ep = dilPolozky(it);
+      const zaznam = ep != null ? podleDilu.get(ep) : null;
       let stav, cls;
-      if (it.ep == null) { stav = 'díl nerozpoznán — doplň číslo'; cls = 'warn'; }
-      else if (!zaznam) { stav = `pro díl ${it.ep} tu není záznam — přeskočí se`; cls = 'warn'; }
-      else if (zaznam.r2_key) { stav = `díl ${it.ep} už má soubor — přeskočí se`; cls = 'skip'; }
-      else { stav = `→ doplní se do dílu ${it.ep}`; cls = 'ok'; pujde++; }
+      if (ep == null) { stav = 'díl nerozpoznán — doplň číslo'; cls = 'warn'; }
+      else if (!zaznam) {
+        const jinde = jindeDil.get(ep);
+        stav = jinde
+          ? `díl ${ep} je v jiné sadě: ${jinde.k.split(' ¦ ').filter(Boolean).join(' · ')}${jinde.r.r2_key ? ' (už má soubor)' : ''}`
+          : `pro díl ${ep} tu není záznam — přeskočí se`;
+        cls = 'warn';
+      }
+      else if (zaznam.r2_key) { stav = `díl ${ep} už má soubor — přeskočí se`; cls = 'skip'; }
+      else { stav = `→ doplní se do dílu ${ep}`; cls = 'ok'; pujde++; }
       it.cil = (zaznam && !zaznam.r2_key) ? zaznam.sub_id : null;
       return `<div class="bulk-row ${cls}">
-        <input type="number" min="1" class="bulk-ep" data-i="${i}" value="${it.ep ?? ''}" placeholder="?" />
+        <input type="number" min="1" class="bulk-ep" data-i="${i}" value="${ep ?? ''}" placeholder="?" />
         <span class="bulk-name" title="${esc(it.name)}">${esc(it.name)}</span>
         <span class="bulk-stav">${esc(stav)}</span>
       </div>`;
     }).join('');
+
+    // Nabídka srovnání číslování — jen když se netrefí vůbec nic
+    // (např. překladatel pojmenoval 2. část jako 13–24, hiyori má 1–12).
+    const cisla = polozky.map(dilPolozky).filter((x) => x != null);
+    const volne = rows.filter((r) => !r.r2_key).map((r) => r.episode);
+    posunBox.innerHTML = '';
+    if (posun !== 0) {
+      posunBox.innerHTML = `<span>Číslování posunuto o ${posun > 0 ? '+' : ''}${posun}.</span>` +
+        `<button id="bulk-reset-offset" class="btn-secondary">Vrátit</button>`;
+      posunBox.querySelector('#bulk-reset-offset').onclick = () => { posun = 0; prepocti(); };
+    } else if (!pujde && cisla.length && volne.length) {
+      const min = Math.min(...cisla), minVolny = Math.min(...volne);
+      const navrh = minVolny - min;
+      if (navrh !== 0) {
+        posunBox.innerHTML = `<span>Čísla nesedí — nejnižší je ${min}, v sadě je volný díl ${minVolny}.</span>` +
+          `<button id="bulk-align">Srovnat (${min} → ${minVolny})</button>`;
+        posunBox.querySelector('#bulk-align').onclick = () => { posun = navrh; prepocti(); };
+      }
+    }
+
     tlacitko.textContent = pujde ? `Nahrát ${pujde} souborů` : 'Není co nahrát';
     tlacitko.disabled = !pujde;
     nahled.querySelectorAll('.bulk-ep').forEach((inp) => {
       inp.onchange = () => {
         const v = inp.value.trim();
-        polozky[Number(inp.dataset.i)].ep = v === '' ? null : Number(v);
+        polozky[Number(inp.dataset.i)].epManual = v === '' ? null : Number(v);
         prepocti();
       };
     });
