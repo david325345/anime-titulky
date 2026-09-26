@@ -30,6 +30,14 @@ function fmtDateStacked(iso) {
   const cas = d.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' });
   return `${den}<br><span class="cas">${cas}</span>`;
 }
+// velikost v lidské podobě (torrenty bývají v GB, soubor dílu v MB)
+function fmtBytes(n) {
+  const b = Number(n);
+  if (!Number.isFinite(b) || b <= 0) return null;
+  if (b >= 1024 ** 3) return `${(b / 1024 ** 3).toFixed(b >= 10 * 1024 ** 3 ? 0 : 1)} GB`;
+  if (b >= 1024 ** 2) return `${Math.round(b / 1024 ** 2)} MB`;
+  return `${Math.round(b / 1024)} KB`;
+}
 function dur(a, b) {
   if (!a || !b) return '—';
   const s = Math.round((new Date(b) - new Date(a)) / 1000);
@@ -643,8 +651,9 @@ function openBdModal(id, source) {
       <tr class="${c.cached ? '' : 'bd-off'}" data-i="${i}">
         <td>${c.pinned ? '📌' : ''}</td>
         <td><b>${esc(c.group || '—')}</b></td>
-        <td class="bd-name" title="${esc(c.name)}">${esc(c.name)}<div class="bd-file">díl: ${esc(c.file || '?')}</div></td>
+        <td class="bd-name" title="${esc(c.name)}">${esc(c.name)}<div class="bd-file">díl: ${esc(c.file || '?')}${fmtBytes(c.file_bytes) ? ` · ${fmtBytes(c.file_bytes)}` : ''}</div></td>
         <td>${c.kind === '🤖 DVD' ? 'DVD' : c.remux ? 'BD Remux' : 'BD'}</td>
+        <td class="num nowrap" title="velikost celého torrentu">${fmtBytes(c.filesize) || '—'}</td>
         <td class="num">${c.seeders}</td>
         <td>${c.cached ? '<span class="bd-tag good">v cache</span>' : '<span class="bd-tag">není v cache</span>'}
             ${c.known ? `<div><span class="bd-tag ${/nepoužitelný/.test(c.known) ? 'bad' : 'good'}">${esc(c.known)}</span></div>` : ''}</td>
@@ -653,10 +662,10 @@ function openBdModal(id, source) {
           <button type="button" data-act="use" ${c.cached ? '' : 'disabled'}>Použít</button>
         </td>
       </tr>
-      <tr class="bd-probe" data-probe="${i}" style="display:none"><td></td><td colspan="6"></td></tr>`).join('');
+      <tr class="bd-probe" data-probe="${i}" style="display:none"><td></td><td colspan="7"></td></tr>`).join('');
     body.innerHTML = `
       <p class="bd-modal-hint">Díl ${d.episode} — releasy seřazené jako u automatiky (BD před DVD, remux na konec, pak seedy). „Použít" přečasuje tenhle díl a rip uloží pro celé anime.</p>
-      <table class="bd-table"><thead><tr><th></th><th>Skupina</th><th>Release</th><th>Zdroj</th><th>Seedy</th><th>Stav</th><th></th></tr></thead>
+      <table class="bd-table"><thead><tr><th></th><th>Skupina</th><th>Release</th><th>Zdroj</th><th>Velikost</th><th>Seedy</th><th>Stav</th><th></th></tr></thead>
       <tbody>${rows}</tbody></table>`;
     // „není v cache" tlačítka nechej zakázaná i po busy(false)
     const lockOff = () => body.querySelectorAll('tr.bd-off button').forEach((b) => (b.disabled = true));
