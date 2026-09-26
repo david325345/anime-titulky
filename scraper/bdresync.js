@@ -297,6 +297,7 @@ async function indexerReleases(sub) {
       group: t.group_name || groupFromName(t.name) || '',     // jen popisek, nic nerozhoduje
       name: t.name || '',
       seeders: Number(t.seeders) || 0,
+      filesize: Number(t.filesize) || null,               // celý torrent (batch)
       kind: DVD_RE.test(vs) && !BD_RE.test(vs) ? '🤖 DVD' : '🤖 BD',
       remux: /remux/i.test(vs),                           // disk-remux = obvykle jen PGS
       targetCrc32: tf.crc32 ? String(tf.crc32).toLowerCase() : null,
@@ -464,7 +465,38 @@ async function saveMachine(sub, outputText, releaseTitle, source, kind = '🤖 B
   return { machineId, r2_key, r2_url: r2PublicUrl(r2_key), bytes: outBuf.length };
 }
 
-// stáhni CZ titulek z R2 a připrav pro subsync (gzip→gunzip; plain→beze změny)
+// Ručně dělané .srt mívají v časovém řádku překlep („00:15:35, 440“, tečka
+// místo čárky, chybějící nula v hodině). alass je přísný a na prvním takovém
+// řádku shodí CELÝ soubor → přečas selže, i když titulek je jinak v pořádku.
+// Srovnáváme proto jen ŘÁDKY S „-->“; text titulků se nikde nemění a originál
+// na R2 zůstává, jak je — opravuje se jen kopie, která jde do přečasu.
+function fixSrtTimestamps(buf, name) {
+  if (!/\.srt$/i.test(name || '')) return buf;   // .ass má časy v jiném formátu
+  let text;
+  try { text = buf.toString('utf8'); } catch { return buf; }
+  if (!text.includes('-->')) return buf;
+
+  let opraveno = 0;
+  const out = text.split(/\r?\n/).map((line) => {
+    if (!line.includes('-->')) return line;
+    const fixed = line
+      // „00:15:35, 440“ i „00:15:35.440“ → „00:15:35,440“ (ms doplníme na 3 místa)
+      .replace(/(\d{1,2}:\d{2}:\d{2})\s*[,.]\s*(\d{1,3})/g,
+        (_, cas, ms) => `${cas},${ms.padEnd(3, '0')}`)
+      // „0:15:35,440“ → „00:15:35,440“
+      .replace(/(^|\s)(\d):(\d{2}):(\d{2}),/g, (_, pre, h, m, sec) => `${pre}0${h}:${m}:${sec},`)
+      .replace(/\s*-->\s*/, ' --> ')
+      .trim();
+    if (fixed !== line) opraveno++;
+    return fixed;
+  }).join('\n');
+
+  if (!opraveno) return buf;
+  console.log(`[bdresync] ${name}: srovnáno ${opraveno} rozbitých časových řádků`);
+  return Buffer.from(out, 'utf8');
+}
+
+// stáhni CZ titulek z R2 a připrav pro subsync (gzip→gunzip; .srt časy srovnat)
 async function loadCz(sub) {
   const czRaw = await r2Get(sub.r2_key);
   if (!czRaw || !czRaw.length) return null;
@@ -472,7 +504,8 @@ async function loadCz(sub) {
   if (czRaw[0] === 0x1f && czRaw[1] === 0x8b) {
     try { czBuf = zlib.gunzipSync(czRaw); } catch { czBuf = czRaw; }
   }
-  return { czBuf, czName: baseNameOf(sub) };
+  const czName = baseNameOf(sub);
+  return { czBuf: fixSrtTimestamps(czBuf, czName), czName };
 }
 
 // společný konec pro RUČNÍ referenci: CZ z R2 → subsync → ulož strojovou verzi
@@ -576,6 +609,9 @@ export async function bdCandidates(sub) {
       return {
         infohash: r.infohash, at_id: r.at_id, group: r.group, name: r.name, kind: r.kind, remux: !!r.remux,
         seeders: r.seeders, cached: !!(r.infohash && cached.has(r.infohash)), file: r.targetFilename,
+        filesize: r.filesize || null,                  // velikost celého torrentu
+        file_bytes: r.targetFilesize || null,          // velikost souboru tohohle dílu
+        files: r.singleFile ? 1 : null,
         known: m ? (m.bad ? 'nepoužitelný (bez textových titulků)' : TIER[m.tier] || null) : null,
         pinned: !!(pin && pin.infohash === r.infohash),
       };
