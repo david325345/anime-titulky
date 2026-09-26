@@ -1207,6 +1207,10 @@ async function openBulkUpload(hiyoriId, anilistId, subId) {
       </label>
       <div id="bulk-offset" class="bulk-offset"></div>
       <div id="bulk-preview" class="bulk-preview"></div>
+      <div id="bulk-progress" class="bulk-progress" hidden>
+        <div class="bulk-progress-text"></div>
+        <div class="bulk-progress-bar"><span></span></div>
+      </div>
       <div class="edit-modal-actions">
         <button id="bulk-cancel">Zrušit</button>
         <button id="bulk-go" class="primary">Nahrát</button>
@@ -1298,10 +1302,22 @@ async function openBulkUpload(hiyoriId, anilistId, subId) {
     const kNahrani = polozky.filter((it) => it.cil);
     tlacitko.disabled = true;
     sel.disabled = true;
+    overlay.querySelector('#bulk-cancel').disabled = true;
+    tlacitko.textContent = 'Nahrávám…';
     let hotovo = 0, chyb = 0;
+    // průběh mimo tlačítko — u dlouhých sérií se text do tlačítka nevešel
+    const prubeh = overlay.querySelector('#bulk-progress');
+    const prubehText = prubeh.querySelector('.bulk-progress-text');
+    const prubehBar = prubeh.querySelector('.bulk-progress-bar');
+    prubeh.hidden = false;
+    const ukaz = (text, podil = null) => {
+      prubehText.textContent = text;
+      prubehBar.classList.toggle('neurcity', podil == null);
+      prubehBar.firstElementChild.style.width = podil == null ? '' : `${Math.round(podil * 100)}%`;
+    };
 
     if (zipFile) {
-      tlacitko.textContent = `Nahrávám ${kNahrani.length} souborů…`;
+      ukaz(`Nahrávám ${kNahrani.length} souborů ze ZIPu (jedním balíkem)…`);
       try {
         const zip_b64 = await new Promise((resolve, reject) => {
           const fr = new FileReader();
@@ -1322,7 +1338,7 @@ async function openBulkUpload(hiyoriId, anilistId, subId) {
       } catch (err) { chyb = kNahrani.length; console.error(err); }
     } else {
       for (const it of kNahrani) {
-        tlacitko.textContent = `Nahrávám ${hotovo + chyb + 1}/${kNahrani.length}…`;
+        ukaz(`Nahrávám ${hotovo + chyb + 1} / ${kNahrani.length}: ${it.name}`, (hotovo + chyb) / kNahrani.length);
         try {
           const buf = await it.file.arrayBuffer();
           const r = await (await fetch(
