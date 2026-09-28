@@ -13,6 +13,7 @@ import * as gensubs from './gensubs.js';
 import * as legiekondor from './legiekondor.js';
 import * as nyasub from './nyasub.js';
 import * as ojiisans from './ojiisans.js';
+import * as animetitulky from './animetitulky.js';
 
 const SOURCES = {
   'wosir.cz': wosir,
@@ -27,6 +28,7 @@ const SOURCES = {
   'anime4.legiekondor.cz': legiekondor,
   'nyasub.cz': nyasub,
   'ojiisans.top': ojiisans,
+  'animetitulky.com': animetitulky,
   // 'dalsi-web.cz': dalsiModul,
 };
 
