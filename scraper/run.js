@@ -8,8 +8,9 @@ import { sleep, throttle, RateLimited, AuthExpired } from './http.js';
 import {
   getMeta, setMeta, upsertAnime, insertSub, getSub,
   markDownloaded, markFailed, startRun, finishRun,
-  getDownloadCandidates, pendingExternByDomain,
+  getDownloadCandidates, pendingExternByDomain, hiyoriIdForAnime,
 } from '../db.js';
+import { lookupAnilist } from './anilist.js';
 
 let running = false;
 export const isRunning = () => running;
@@ -115,6 +116,99 @@ function manualFnv1a(str) {
 function manualVariantId(hiyoriId, ep, group, release, lang) {
   const key = [hiyoriId, ep, manualNorm(group), manualNorm(release), manualNorm(lang)].join('|');
   return MANUAL_VARIANT_BASE + (manualFnv1a(key) % 8000000000);
+}
+
+// ── Ruční titulky BEZ hiyori (anime na hiyori není, typicky 18+) ──────────
+// Stejné prázdné záznamy jako addManualEpisodes, jen hiyori_id = NULL a ID
+// z vlastního pásma (klíč = AniList ID, případně MAL ID):
+//   1e12   + anilist*1000 + díl   (máme AniList ID)
+//   1.5e12 + mal*1000 + díl       (AniList anime nezná → jen MAL)
+// Další sady téhož dílu → variantní pásmo (hash s prefixem al:/mal:, nekoliduje s hiyori klíči).
+const NOHIYORI_AL_BASE = 1_000_000_000_000;
+const NOHIYORI_MAL_BASE = 1_500_000_000_000;
+
+export async function addManualNoHiyori({ anilistId, malId, title, epFrom, epTo, lang, group, release }) {
+  // 1) doplň chybějící údaje z AniListu (veřejné API, bez klíče)
+  let info = null;
+  let warning = null;
+  try {
+    info = await lookupAnilist({ anilistId, malId });
+  } catch (e) {
+    if (!title) throw new Error(e.message + ' — vyplň název ručně a zkus to znovu.');
+    warning = `AniList nešel dotázat (${e.message}), použity jen zadané údaje.`;
+  }
+  if (anilistId && !info && !warning) {
+    return { error: `AniList nezná anime s ID ${anilistId} — zkontroluj číslo.` };
+  }
+  const anilist_id = anilistId || info?.anilist_id || null;
+  const mal_id = malId || info?.mal_id || null;
+  const animeTitle = title || info?.title || null;
+  if (!animeTitle) {
+    return { error: `AniList nezná anime s MAL ID ${malId} — vyplň název (a případně AniList ID).` };
+  }
+  if (info && malId && info.mal_id && info.mal_id !== malId) {
+    warning = `Pozor: AniList u tohoto anime uvádí MAL ${info.mal_id}, zadáno ${malId} (použito zadané).`;
+  }
+
+  // 2) už ho máme přes hiyori? → nerozdělovat na dvě hromádky
+  const dup = hiyoriIdForAnime({ anilist_id, mal_id });
+  if (dup) {
+    return {
+      error: `Tohle anime už máme pod hiyori #${dup.hiyori_id} (${String(dup.anime_title || '').replace(/\s*-\s*Hiyori$/i, '')}) — přidej ho přes hiyori.`,
+    };
+  }
+
+  const from = Math.max(1, Number(epFrom) || 1);
+  const to = Math.max(from, Number(epTo) || from);
+  if (to > 999) return { error: 'Maximální číslo dílu je 999.' };
+
+  const key = anilist_id ? `al:${anilist_id}` : `mal:${mal_id}`;
+  const base = anilist_id
+    ? NOHIYORI_AL_BASE + anilist_id * 1000
+    : NOHIYORI_MAL_BASE + mal_id * 1000;
+  const now = new Date().toISOString();
+
+  let added = 0;
+  for (let ep = from; ep <= to; ep++) {
+    // stejná logika jako u hiyori: 1. sada dílu = základní ID, další sady = varianta
+    const oldId = base + ep;
+    const existing = getSub(oldId);
+    const sameAsOld = existing
+      && manualNorm(existing.group_name) === manualNorm(group)
+      && manualNorm(existing.release) === manualNorm(release)
+      && manualNorm(existing.lang) === manualNorm(lang);
+    const sub_id = (!existing || sameAsOld) ? oldId : manualVariantId(key, ep, group, release, lang);
+    const changed = insertSub({
+      sub_id,
+      hiyori_id: null,
+      anilist_id,
+      mal_id,
+      anime_title: animeTitle,
+      episode: ep,
+      lang: lang || 'CZ',
+      group_id: null,
+      group_name: group || null,
+      release: release || null,
+      version: null,
+      kind: 'manual',
+      url: null,
+      extern_domain: null,
+      added_date: now,
+      first_seen: now,
+      status: 'not_downloaded', // čeká na ruční nahrání přes 📤 / 📦
+    });
+    if (changed) added++;
+  }
+
+  return {
+    title: animeTitle,
+    anilist_id,
+    mal_id,
+    from, to, added,
+    episodes_total: info?.episodes ?? null,
+    is_adult: info?.isAdult ?? null,
+    warning,
+  };
 }
 
 export async function addManualEpisodes(hiyoriId, { epFrom, epTo, lang, group, release }) {

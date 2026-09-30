@@ -13,8 +13,8 @@ import http from 'node:http';
 import https from 'node:https';
 import zlib from 'node:zlib';
 import { CONFIG } from '../config.js';
-import { r2Enabled, r2Put, r2Get, r2PublicUrl } from '../r2.js';
-import { saveMachineSub, machineIdFor, getBdPref, setBdPref, getBdPin, setBdPin } from '../db.js';
+import { r2Enabled, r2Put, r2Get, r2PublicUrl, r2Delete } from '../r2.js';
+import { saveMachineSub, machineIdFor, getBdPref, setBdPref, getBdPin, setBdPin, getSub } from '../db.js';
 import { cachedHashes, episodeLink, readTimeline, pickDialogueTrack, timelineToSrt } from './torboxref.js';
 
 // ── Indexer (self-signed cert → jen na tenhle host vypneme verifikaci) ──────
@@ -443,6 +443,9 @@ async function saveMachine(sub, outputText, releaseTitle, source, kind = '🤖 B
   const outName = `${machineId}__${baseNameOf(sub)}`;
   const r2_key = `machine/${animeSeg}/${epKey}/${outName}.gz`;
 
+  // předchozí verze téhle strojovky (po přečíslování ID může mít jiný r2_key)
+  const prevKey = getSub(machineId)?.r2_key || null;
+
   await r2Put(r2_key, gz, 'application/gzip');
   saveMachineSub({
     sub_id: machineId,
@@ -462,6 +465,10 @@ async function saveMachine(sub, outputText, releaseTitle, source, kind = '🤖 B
     machine_source: source,
     machine_ref: refHash ? String(refHash).toLowerCase() : null,   // ze kterého releasu je časování
   });
+  // starý soubor pod jiným klíčem by na R2 zůstal viset → smaž ho (chyba nevadí)
+  if (prevKey && prevKey !== r2_key) {
+    await r2Delete(prevKey).catch((e) => console.error('[bdresync] smazání staré verze na R2 selhalo:', e.message));
+  }
   return { machineId, r2_key, r2_url: r2PublicUrl(r2_key), bytes: outBuf.length };
 }
 
