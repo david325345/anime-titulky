@@ -76,9 +76,14 @@ function renderStats(c, status) {
 
 function renderSubs(subs) {
   $('#subsTable tbody').innerHTML = subs.map((s) => {
-    const cleanTitle = (s.anime_title || '#' + s.hiyori_id).replace(/\s*[-–]\s*Hiyori\s*$/i, '');
-    const anime = s.hiyori_id
-      ? `<a href="https://hiyori.cz/anime/${s.hiyori_id}" target="_blank" title="${esc(cleanTitle)}">${esc(cleanTitle)}</a>`
+    const cleanTitle = (s.anime_title || (s.hiyori_id ? '#' + s.hiyori_id : 'AL' + (s.anilist_id || '?')))
+      .replace(/\s*[-–]\s*Hiyori\s*$/i, '');
+    // odkaz: hiyori, u anime bez hiyori (ruční 18+ apod.) AniList, případně MAL
+    const animeHref = s.hiyori_id ? `https://hiyori.cz/anime/${s.hiyori_id}`
+      : s.anilist_id ? `https://anilist.co/anime/${s.anilist_id}`
+      : s.mal_id ? `https://myanimelist.net/anime/${s.mal_id}` : null;
+    const anime = animeHref
+      ? `<a href="${animeHref}" target="_blank" title="${esc(cleanTitle)}">${esc(cleanTitle)}</a>`
       : esc(cleanTitle);
     const lang = s.lang ? `<span class="pill lang-${esc(s.lang)}">${esc(s.lang)}</span>` : '';
     const src = s.kind === 'direct'
@@ -96,7 +101,7 @@ function renderSubs(subs) {
     // ruční nahrání titulku (jen u nestažených)
     const uploadBtn = s.status !== 'downloaded'
       ? `<button class="upload-sub" data-id="${s.sub_id}" title="Nahrát titulek ručně (.ass/.srt/.zip)">📤</button>` +
-        `<button class="bulk-upload" data-hiyori="${s.hiyori_id || ''}" data-anilist="${s.anilist_id || ''}" data-id="${s.sub_id}" title="Hromadně nahrát balík titulků — díly se rozpoznají z názvů souborů">📦</button>`
+        `<button class="bulk-upload" data-hiyori="${s.hiyori_id || ''}" data-anilist="${s.anilist_id || ''}" data-mal="${s.mal_id || ''}" data-id="${s.sub_id}" title="Hromadně nahrát balík titulků — díly se rozpoznají z názvů souborů">📦</button>`
       : '';
     // stáhnout právě tenhle záznam teď (jen u nestažených, ne u ručních — ty čekají na 📤)
     const dlNowBtn = (s.status !== 'downloaded' && s.kind !== 'manual')
@@ -258,10 +263,25 @@ $('#restoreFile').addEventListener('change', async (e) => {
 async function addAnime() {
   const url = $('#addUrl').value.trim();
   const msg = $('#addMsg');
-  if (!url) { msg.textContent = 'Vlož odkaz na anime z hiyori.'; return; }
-
   const manual = $('#manualChk').checked;
-  let query = '/api/add-anime?url=' + encodeURIComponent(url);
+  const noHiyori = manual && $('#nhChk').checked;
+  let query;
+
+  if (noHiyori) {
+    const al = $('#nhAnilist').value.trim();
+    const mal = $('#nhMal').value.trim();
+    if (!al && !mal) {
+      msg.className = 'addmsg err';
+      msg.textContent = '⚠ Zadej AniList ID nebo MAL ID (stačí jedno).';
+      return;
+    }
+    query = '/api/add-anime?nohiyori=1' +
+      `&anilist=${encodeURIComponent(al)}&mal=${encodeURIComponent(mal)}` +
+      `&title=${encodeURIComponent($('#nhTitle').value.trim())}`;
+  } else {
+    if (!url) { msg.className = 'addmsg err'; msg.textContent = 'Vlož odkaz na anime z hiyori.'; return; }
+    query = '/api/add-anime?url=' + encodeURIComponent(url);
+  }
 
   if (manual) {
     const from = Number($('#epFrom').value);
@@ -287,7 +307,14 @@ async function addAnime() {
       msg.textContent = '⚠ ' + r.error;
     } else {
       msg.className = 'addmsg ok';
-      if (r.manual) {
+      if (r.nohiyori) {
+        const ids = [r.anilist_id ? `AL ${r.anilist_id}` : '', r.mal_id ? `MAL ${r.mal_id}` : ''].filter(Boolean).join(' · ');
+        let t = `✅ ${r.title || 'anime'} (${ids}) — vytvořeno ${r.added} prázdných záznamů (díly ${r.from}–${r.to}). Nahraj k nim titulky přes 📤 / 📦.`;
+        if (r.episodes_total) t += ` AniList uvádí ${r.episodes_total} dílů.`;
+        msg.textContent = t;
+        if (r.warning) msg.textContent += ' ⚠ ' + r.warning;
+        $('#nhAnilist').value = ''; $('#nhMal').value = ''; $('#nhTitle').value = '';
+      } else if (r.manual) {
         msg.textContent = `✅ ${r.title || 'anime'} — vytvořeno ${r.added} prázdných záznamů (díly ${r.from}–${r.to}). Nahraj k nim titulky přes 📤.`;
       } else {
         const found = r.found || 0;
@@ -321,9 +348,22 @@ async function addAnime() {
 }
 $('#addBtn').addEventListener('click', addAnime);
 $('#addUrl').addEventListener('keydown', (e) => { if (e.key === 'Enter') addAnime(); });
+// „Bez hiyori": místo hiyori odkazu pole AniList / MAL / název (jen v ručním režimu)
+function applyNoHiyori() {
+  const nh = $('#manualChk').checked && $('#nhChk').checked;
+  $('#addUrl').style.display = nh ? 'none' : '';
+  for (const id of ['#nhAnilist', '#nhMal', '#nhTitle']) $(id).style.display = nh ? '' : 'none';
+}
 $('#manualChk').addEventListener('change', (e) => {
   $('#manualRow').style.display = e.target.checked ? 'flex' : 'none';
+  $('#nhLbl').style.display = e.target.checked ? 'block' : 'none';
+  if (!e.target.checked) $('#nhChk').checked = false;
+  applyNoHiyori();
 });
+$('#nhChk').addEventListener('change', applyNoHiyori);
+for (const id of ['#nhAnilist', '#nhMal', '#nhTitle']) {
+  $(id).addEventListener('keydown', (e) => { if (e.key === 'Enter') addAnime(); });
+}
 
 // stránkování
 $('#prevBtn').addEventListener('click', () => { if (curPage > 1) { curPage--; loadSubs(); } });
@@ -712,7 +752,7 @@ $('#subsTable').addEventListener('click', async (e) => {
   // hromadné nahrání balíku titulků — díl se pozná z názvu souboru (parser indexeru)
   const bulk = e.target.closest('button.bulk-upload');
   if (bulk) {
-    openBulkUpload(bulk.dataset.hiyori, bulk.dataset.anilist, bulk.dataset.id);
+    openBulkUpload(bulk.dataset.hiyori, bulk.dataset.anilist, bulk.dataset.id, bulk.dataset.mal);
     return;
   }
 
@@ -1122,7 +1162,7 @@ function bulkSetLabel(key, rows) {
   return `${popis}  (${rows.length} dílů, ${volnych} bez souboru)${navic}`;
 }
 
-async function openBulkUpload(hiyoriId, anilistId, subId) {
+async function openBulkUpload(hiyoriId, anilistId, subId, malId) {
   // 1) soubory
   const input = document.createElement('input');
   input.type = 'file';
@@ -1159,7 +1199,7 @@ async function openBulkUpload(hiyoriId, anilistId, subId) {
   // 2) záznamy anime + rozparsované názvy
   let subs = [], parsed = [];
   try {
-    const q = hiyoriId ? `hiyori_id=${hiyoriId}` : `anilist_id=${anilistId}`;
+    const q = hiyoriId ? `hiyori_id=${hiyoriId}` : anilistId ? `anilist_id=${anilistId}` : `mal_id=${malId}`;
     const a = await (await fetch(`/api/subs/by-anime?${q}`)).json();
     if (a.error) throw new Error(a.error);
     subs = a.subs || [];

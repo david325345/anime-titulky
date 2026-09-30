@@ -26,11 +26,18 @@
       <h2>Přidat anime z hiyori</h2>
       <div class="addrow">
         <input id="addUrl" type="text" placeholder="https://hiyori.cz/anime/21389 nebo 21389" />
+        <input id="nhAnilist" type="text" placeholder="AniList ID / odkaz" class="nh-id" style="display:none" />
+        <input id="nhMal" type="text" placeholder="MAL ID / odkaz" class="nh-id" style="display:none" />
+        <input id="nhTitle" type="text" placeholder="název (nepovinné — doplní se z AniListu)" style="display:none" />
         <button id="addBtn">Přidat</button>
       </div>
       <label class="manual-toggle">
         <input type="checkbox" id="manualChk" />
         Ruční titulky (hiyori má anime, ale ne titulky — vytvoří prázdné záznamy pro rozsah dílů)
+      </label>
+      <label class="manual-toggle" id="nhLbl" style="display:none">
+        <input type="checkbox" id="nhChk" />
+        Bez hiyori (anime na hiyori není, např. 18+ — zadej AniList nebo MAL ID, zbytek se doplní z AniListu)
       </label>
       <div id="manualRow" class="addrow manual-row" style="display:none">
         <input id="epFrom" type="number" min="1" placeholder="od dílu" class="ep-inp" />

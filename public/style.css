@@ -132,6 +132,7 @@ button.reset-sub:disabled { opacity: .4; cursor: default; }
 .manual-toggle input { margin-right: 6px; vertical-align: middle; }
 .manual-row { gap: 8px; margin-top: 6px; }
 .manual-row .ep-inp { max-width: 130px; }
+.addrow .nh-id { flex: 0 1 190px; }
 .st-downloaded { color: #6ee787; }
 .st-new { color: var(--muted); }
 .st-not_downloaded { color: var(--muted); }
