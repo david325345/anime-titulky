@@ -4,7 +4,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { CONFIG } from './config.js';
-import { runOnce, downloadOnce, downloadSingle, isRunning, ingestAnime, addManualEpisodes } from './scraper/run.js';
+import { runOnce, downloadOnce, downloadSingle, isRunning, ingestAnime, addManualEpisodes, addManualNoHiyori } from './scraper/run.js';
 import {
   overviewCounts, recentSubs, recentRuns, getMeta, getSub, findSubs, subsAvailability,
   listSubs, deleteSub, recentlyAdded, markDownloaded, allSubs, updateSubMeta,
@@ -12,7 +12,7 @@ import {
   machineVersionsFor, getAkiSub, bulkBdTargetsHiyori, bulkBdTargetsAki, getBdPin, clearBdPin,
   insertRequest, listRequests, getRequest, setRequestStatus, requestStatusForAnilist,
   subsByAnime,
-  backfillQuality,
+  backfillQuality, migrateMachineIds,
 } from './db.js';
 import { classifyQuality, releaseGroups } from './scraper/quality.js';
 import * as hanabi from './scraper/sources/hanabi.js';
@@ -222,8 +222,9 @@ app.use(basicAuth);
 app.get('/api/subs/by-anime', (req, res) => {
   const hiyori_id = Number(req.query.hiyori_id) || null;
   const anilist_id = Number(req.query.anilist_id) || null;
-  if (!hiyori_id && !anilist_id) return res.status(400).json({ error: 'Zadej hiyori_id nebo anilist_id.' });
-  res.json({ subs: subsByAnime({ hiyori_id, anilist_id }) });
+  const mal_id = Number(req.query.mal_id) || null;
+  if (!hiyori_id && !anilist_id && !mal_id) return res.status(400).json({ error: 'Zadej hiyori_id, anilist_id nebo mal_id.' });
+  res.json({ subs: subsByAnime({ hiyori_id, anilist_id, mal_id }) });
 });
 
 // POST /api/parse-names — přeposílá názvy souborů parseru indexeru (prohlížeč
@@ -706,6 +707,40 @@ app.post('/api/download-sub/:id', async (req, res) => {
 
 // ruční přidání anime z hiyori URL (nebo ID) — naparsuje titulky, zařadí do fronty
 app.get('/api/add-anime', async (req, res) => {
+  // Režim BEZ hiyori (anime na hiyori není, typicky 18+): AniList/MAL ID + rozsah dílů
+  // → prázdné ruční záznamy jako u „Ruční titulky", jen bez hiyori_id.
+  if (req.query.nohiyori) {
+    const idFrom = (v, re) => {
+      const t = String(v || '').trim();
+      const m = t.match(re) || t.match(/^(\d+)$/);
+      return m ? Number(m[1]) : null;
+    };
+    const anilistId = idFrom(req.query.anilist, /anilist\.co\/anime\/(\d+)/i);
+    const malId = idFrom(req.query.mal, /myanimelist\.net\/anime\/(\d+)/i);
+    const epFrom = Number(req.query.ep_from) || null;
+    const epTo = Number(req.query.ep_to) || null;
+    if (!anilistId && !malId) {
+      return res.status(400).json({ error: 'Zadej AniList ID nebo MAL ID (číslo nebo odkaz).' });
+    }
+    if (!epFrom || !epTo || epTo < epFrom) {
+      return res.status(400).json({ error: 'Zadej platný rozsah dílů (od–do).' });
+    }
+    try {
+      const r = await addManualNoHiyori({
+        anilistId, malId,
+        title: String(req.query.title || '').trim() || null,
+        epFrom, epTo,
+        lang: req.query.lang || 'CZ',
+        group: req.query.group || null,
+        release: req.query.release || null,
+      });
+      if (r.error) return res.status(400).json({ error: r.error });
+      return res.json({ ok: true, manual: true, nohiyori: true, ...r });
+    } catch (e) {
+      return res.status(500).json({ error: 'Nepodařilo se přidat anime: ' + e.message });
+    }
+  }
+
   const input = String(req.query.url || req.query.id || '').trim();
   // vytáhni hiyori_id z URL (…/anime/12345) nebo z holého čísla
   const m = input.match(/\/anime\/(\d+)/) || input.match(/^(\d+)$/);
@@ -935,6 +970,12 @@ app.use((err, req, res, next) => {
   });
 });
 
+
+// přečíslování starých strojových ID (2e9/3e9) do nového pásma — dřív, než přijde první požadavek
+try {
+  const n = migrateMachineIds();
+  if (n) console.log(`[machine-ids] přečíslováno ${n} strojových verzí do nového pásma`);
+} catch (e) { console.error('[machine-ids] migrace selhala:', e.message); }
 
 app.listen(CONFIG.port, () => {
   console.log(`NimeToDex Titulky běží na portu ${CONFIG.port}`);

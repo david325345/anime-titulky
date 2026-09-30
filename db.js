@@ -316,7 +316,7 @@ export const getSub = (id) => db.prepare('SELECT * FROM subs WHERE sub_id=?').ge
 
 // Všechny (nestrojové) záznamy jednoho anime — pro hromadné nahrání titulků,
 // kde se soubory párují na už založené prázdné díly.
-export function subsByAnime({ hiyori_id = null, anilist_id = null }) {
+export function subsByAnime({ hiyori_id = null, anilist_id = null, mal_id = null }) {
   if (hiyori_id) {
     return db.prepare(
       'SELECT sub_id, episode, lang, group_name, release, status, r2_key, filename, anime_title' +
@@ -328,6 +328,12 @@ export function subsByAnime({ hiyori_id = null, anilist_id = null }) {
       'SELECT sub_id, episode, lang, group_name, release, status, r2_key, filename, anime_title' +
       ' FROM subs WHERE anilist_id=? AND machine_of IS NULL ORDER BY episode, lang, group_name'
     ).all(Number(anilist_id));
+  }
+  if (mal_id) { // anime bez hiyori i AniListu (ruční přidání jen s MAL ID)
+    return db.prepare(
+      'SELECT sub_id, episode, lang, group_name, release, status, r2_key, filename, anime_title' +
+      ' FROM subs WHERE mal_id=? AND machine_of IS NULL ORDER BY episode, lang, group_name'
+    ).all(Number(mal_id));
   }
   return [];
 }
@@ -527,12 +533,53 @@ export function listSubs({ limit = 100, offset = 0, q = null } = {}) {
 
 // ── Strojové verze („BD auto") ──────────────────────────────────────────
 // Deterministické ID machine záznamu = pevná báze + sub_id originálu.
-// Díky tomu je přečas idempotentní (druhý klik přepíše týž řádek) a pásmo
-// (2e9+) nekoliduje s reálnými ID (hiyori malá, archivy < ~1e9).
-export const MACHINE_ID_BASE = 2_000_000_000;      // hiyori originály
-export const MACHINE_ID_BASE_AKI = 3_000_000_000;  // archiv (akihabara.db) originály
+// Díky tomu je přečas idempotentní (druhý klik přepíše týž řádek).
+//
+// Pásma sub_id (ať se nic nekřiží):
+//   hiyori / hns / archiv ........ < 9e8
+//   ruční (hiyori) ............... 9e8  + hiyori*1000 + díl
+//   ruční varianty (hash) ........ 1e9 … 9e9
+//   ruční bez hiyori (AniList) ... 1e12 + anilist*1000 + díl
+//   ruční bez hiyori (jen MAL) ... 1.5e12 + mal*1000 + díl
+//   strojové (hiyori.db orig.) ... 1e13 + sub_id originálu
+//   strojové (archiv orig.) ...... 2e13 + akihabara_id
+// Dřív byly strojové na 2e9/3e9 → křížily se s pásmem ručních variant
+// (INSERT OR REPLACE přečasu mohl přepsat ruční záznam). Stará ID
+// přečísluje migrateMachineIds() při startu.
+export const MACHINE_ID_BASE = 10_000_000_000_000;      // hiyori.db originály
+export const MACHINE_ID_BASE_AKI = 20_000_000_000_000;  // archiv (akihabara.db) originály
 export const machineIdFor = (originalId, source = 'hiyori') =>
   (source === 'akihabara' ? MACHINE_ID_BASE_AKI : MACHINE_ID_BASE) + Number(originalId);
+
+// Jednorázová migrace starých strojových ID (2e9/3e9 + orig) do nového pásma.
+// Idempotentní: bere jen strojové řádky pod novou bází. r2_key zůstává
+// (soubor na R2 se nepřesouvá, jen řádek dostane nové ID).
+export function migrateMachineIds() {
+  const rows = db
+    .prepare('SELECT sub_id, machine_of, machine_source FROM subs WHERE machine_of IS NOT NULL AND sub_id < ?')
+    .all(MACHINE_ID_BASE);
+  if (!rows.length) return 0;
+  const upd = db.prepare('UPDATE subs SET sub_id=? WHERE sub_id=?');
+  const tx = db.transaction((list) => {
+    let n = 0;
+    for (const r of list) {
+      const src = r.machine_source === 'akihabara' ? 'akihabara' : 'hiyori';
+      const nid = machineIdFor(r.machine_of, src);
+      if (nid !== r.sub_id) n += upd.run(nid, r.sub_id).changes;
+    }
+    return n;
+  });
+  return tx(rows);
+}
+
+// Pro ruční přidání bez hiyori: je tohle anime už v DB pod nějakým hiyori_id?
+// (ať se jedno anime nerozdělí na dvě hromádky záznamů)
+export function hiyoriIdForAnime({ anilist_id = null, mal_id = null }) {
+  const q = (col, v) => db
+    .prepare(`SELECT hiyori_id, anime_title FROM subs WHERE ${col}=? AND hiyori_id IS NOT NULL LIMIT 1`)
+    .get(Number(v));
+  return (anilist_id && q('anilist_id', anilist_id)) || (mal_id && q('mal_id', mal_id)) || null;
+}
 
 const _saveMachineSub = db.prepare(`
   INSERT OR REPLACE INTO subs
