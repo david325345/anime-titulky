@@ -4,16 +4,30 @@ import { getFeed } from './feed.js';
 import { getDetail } from './detail.js';
 import { downloadDirect } from './download.js';
 import { downloadExtern, hasSourceFor } from './sources/index.js';
-import { sleep, throttle, RateLimited, AuthExpired } from './http.js';
+import { sleep, throttle, RateLimited, AuthExpired, NotYetAvailable } from './http.js';
 import {
   getMeta, setMeta, upsertAnime, insertSub, getSub,
-  markDownloaded, markFailed, startRun, finishRun,
+  markDownloaded, markFailed, markWaiting, startRun, finishRun,
   getDownloadCandidates, pendingExternByDomain, hiyoriIdForAnime,
 } from '../db.js';
 import { lookupAnilist } from './anilist.js';
 
 let running = false;
 export const isRunning = () => running;
+
+// Titulek na zdroji ještě není (NotYetAvailable) → čekej ve frontě max. tolik dní
+// od prvního spatření, pak už ho označ jako chybu.
+const EXTERN_WAIT_DAYS = Number(process.env.EXTERN_WAIT_DAYS) || 3;
+function handleNotYet(sub, e) {
+  const since = Date.parse(sub.first_seen || sub.added_date || '');
+  const days = Number.isFinite(since) ? (Date.now() - since) / 86400000 : Infinity;
+  if (days > EXTERN_WAIT_DAYS) {
+    markFailed(sub.sub_id, `${e.message} (čekáno ${EXTERN_WAIT_DAYS} dny, vzdávám)`);
+    return 'failed';
+  }
+  markWaiting(sub.sub_id, '⏳ ' + e.message);
+  return 'waiting';
+}
 
 // Blokované zdroje/skupiny (CONFIG.blocked) — takové řádky se vůbec neevidují.
 // Používá se pro archivy, které už máme kompletně naimportované jinudy, aby
@@ -348,6 +362,16 @@ async function downloadQueue({ log, stats }) {
         log(`  🔒 ${e.domain || dom}: ${e.message} → přeskakuji zbylé titulky z tohoto webu v tomto běhu.`);
         continue;
       }
+      if (e instanceof NotYetAvailable) {
+        if (handleNotYet(sub, e) === 'failed') {
+          stats.failed++;
+          log(`  ✗ stažení sub ${subId}: ${e.message} — čekáno ${EXTERN_WAIT_DAYS} dny, vzdávám.`);
+        } else {
+          log(`  ⏳ sub ${subId}: ${e.message} — nechávám ve frontě, zkusím příště.`);
+        }
+        await throttle();
+        continue;
+      }
       markFailed(subId, e.message);
       stats.failed++;
       log(`  ✗ stažení sub ${subId}: ${e.message}`);
@@ -425,6 +449,14 @@ export async function downloadSingle(subId, { log = console.log } = {}) {
     log(`✓ ručně staženo sub ${subId} (${res.filename})`);
     return { ok: true, filename: res.filename, file_bytes: res.file_bytes };
   } catch (e) {
+    if (e instanceof NotYetAvailable) {
+      const st = handleNotYet(sub, e);
+      const msg = st === 'failed'
+        ? `${e.message} (čekáno ${EXTERN_WAIT_DAYS} dny — označeno jako chyba)`
+        : `${e.message} — zůstává ve frontě, zkusí se při dalším běhu.`;
+      log(`⏳ ruční stažení sub ${subId}: ${msg}`);
+      return { ok: false, error: msg };
+    }
     markFailed(subId, e.message);
     log(`✗ ruční stažení sub ${subId}: ${e.message}`);
     return { ok: false, error: e.message };

@@ -20,6 +20,13 @@ export class AuthExpired extends Error {
   constructor(msg, domain) { super(msg); this.name = 'AuthExpired'; this.domain = domain || null; }
 }
 
+// Titulek na zdrojovém webu (zatím) není — hiyori ho ohlásil dřív, než ho web
+// vystavil, nebo web ukázal starou stránku z cache. Není to chyba: záznam zůstane
+// ve frontě (pending_extern) a zkusí se znovu; do 'failed' až po EXTERN_WAIT_DAYS.
+export class NotYetAvailable extends Error {
+  constructor(msg) { super(msg); this.name = 'NotYetAvailable'; }
+}
+
 // náhodná pauza v rozsahu (jitter) — pravidelný rytmus je pro rate-limiter čitelný
 export function throttle() {
   let min = CONFIG.delayMinMs;
