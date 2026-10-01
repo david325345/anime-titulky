@@ -16,6 +16,7 @@ import {
 } from './db.js';
 import { classifyQuality, releaseGroups } from './scraper/quality.js';
 import * as hanabi from './scraper/sources/hanabi.js';
+import { startKeepAlive as startAtKeepAlive } from './scraper/sources/animetitulky-http.js';
 import { saveSubFile } from './scraper/download.js';
 import { bdResync, bdResyncManual, bdCandidates, bdProbe } from './scraper/bdresync.js';
 import AdmZip from 'adm-zip';
@@ -984,6 +985,8 @@ app.listen(CONFIG.port, () => {
     const n = backfillQuality();
     if (n) console.log(`[quality] doplněno u ${n} titulků`);
   } catch (e) { console.error('[quality] backfill selhal:', e.message); }
+  // animetitulky.com odhlašuje po 24 h neaktivity → 2× denně se ozvat s cookie
+  startAtKeepAlive();
   console.log(`Data dir: ${CONFIG.dataDir}`);
   if (!CONFIG.auth.user || !CONFIG.auth.pass) {
     console.log('⚠ Dashboard NENÍ chráněný (nastav AUTH_USER a AUTH_PASS).');
