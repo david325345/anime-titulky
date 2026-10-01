@@ -14,6 +14,7 @@ import * as cheerio from 'cheerio';
 import AdmZip from 'adm-zip';
 import { getHtml, getBinary } from './animetitulky-http.js';
 import { saveSubFile } from '../download.js';
+import { NotYetAvailable } from '../http.js';
 
 export const name = 'animetitulky.com';
 
@@ -90,8 +91,9 @@ export async function download(sub) {
   const card = pickCard(matches, sub);
   if (!card) {
     const nums = [...new Set(all.map((c) => c.episode))].sort((a, b) => a - b);
-    throw new Error(
-      `animetitulky: nenašel jsem díl ${sub.episode} (na stránce jsou díly: ${nums.join(', ') || 'žádné'}).`
+    // díl tam (zatím) není — nahraje se později / web ukázal starou stránku → zkusit znovu
+    throw new NotYetAvailable(
+      `animetitulky: díl ${sub.episode} na stránce zatím není (jsou tam díly: ${nums.join(', ') || 'žádné'}).`
     );
   }
 

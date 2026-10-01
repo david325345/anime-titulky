@@ -32,9 +32,12 @@ function headers(extra = {}) {
 
 const abs = (url) => (url.startsWith('http') ? url : BASE + url);
 
-// veřejná stránka (seznam dílů) — přihlášení nekontrolujeme
+// veřejná stránka (seznam dílů) — přihlášení nekontrolujeme.
+// Web je za CDN WEDOS (cache-control: max-age=300) → bez triku může vrátit až
+// 5 min starou stránku, kde nový díl ještě chybí. Parametr _=<čas> cache obejde.
 export async function getHtml(url) {
-  const u = abs(url);
+  const u0 = abs(url);
+  const u = u0 + (u0.includes('?') ? '&' : '?') + '_=' + Date.now();
   await hostGate(u);
   const res = await fetch(u, { headers: headers(), redirect: 'follow' });
   if (!res.ok) {
