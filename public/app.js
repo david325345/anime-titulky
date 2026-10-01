@@ -1230,6 +1230,8 @@ async function openBulkUpload(hiyoriId, anilistId, subId, malId) {
   const polozky = zipEntries
     ? zipEntries.map((e) => ({ name: e.name, entry: e.entry, file: null, epBase: epByName.get(e.name) ?? null, epManual: null }))
     : files.map((f) => ({ name: f.name, entry: null, file: f, epBase: epByName.get(f.name) ?? null, epManual: null }));
+  // přirozené řazení podle názvu (díl 2 před 10) — na pořadí stojí „Očíslovat postupně"
+  polozky.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
   let posun = 0; // srovnání číslování (např. díly 13–24 → 1–12)
   const dilPolozky = (it) => (it.epManual != null ? it.epManual : (it.epBase != null ? it.epBase + posun : null));
 
@@ -1296,7 +1298,7 @@ async function openBulkUpload(hiyoriId, anilistId, subId, malId) {
       else { stav = `→ doplní se do dílu ${ep}`; cls = 'ok'; pujde++; }
       it.cil = (zaznam && !zaznam.r2_key) ? zaznam.sub_id : null;
       return `<div class="bulk-row ${cls}">
-        <input type="number" min="1" class="bulk-ep" data-i="${i}" value="${ep ?? ''}" placeholder="?" />
+        <input type="number" min="1" class="bulk-ep${it.auto ? ' bulk-ep-auto' : ''}" data-i="${i}" value="${ep ?? ''}" placeholder="?"${it.auto ? ' title="doplněno postupně — zkontroluj"' : ''} />
         <span class="bulk-name" title="${esc(it.name)}">${esc(it.name)}</span>
         <span class="bulk-stav">${esc(stav)}</span>
       </div>`;
@@ -1321,16 +1323,52 @@ async function openBulkUpload(hiyoriId, anilistId, subId, malId) {
       }
     }
 
+    // Nerozpoznané díly → nabídnout očíslování odshora dolů
+    const prazdnych = polozky.filter((it) => dilPolozky(it) == null).length;
+    if (prazdnych) {
+      const box = document.createElement('div');
+      box.className = 'bulk-autonum';
+      box.innerHTML = `<span>${prazdnych} ${prazdnych === 1 ? 'soubor nemá' : prazdnych < 5 ? 'soubory nemají' : 'souborů nemá'} číslo dílu.</span>` +
+        `<button type="button" title="Doplní čísla do prázdných řádků odshora dolů od nejnižšího dílu sady. Když do některého řádku napíšeš číslo ručně, řádky pod ním pokračují od něj.">Očíslovat postupně</button>`;
+      box.querySelector('button').onclick = () => { ocislujPostupne(rows); prepocti(); };
+      posunBox.appendChild(box);
+    }
+
     tlacitko.textContent = pujde ? `Nahrát ${pujde} souborů` : 'Není co nahrát';
     tlacitko.disabled = !pujde;
     nahled.querySelectorAll('.bulk-ep').forEach((inp) => {
       inp.onchange = () => {
         const v = inp.value.trim();
         polozky[Number(inp.dataset.i)].epManual = v === '' ? null : Number(v);
+        polozky[Number(inp.dataset.i)].auto = false; // ručně přepsané už není odhad
         prepocti();
       };
     });
   }
+  // Doplní čísla do řádků bez dílu, odshora dolů, od nejnižšího dílu sady.
+  // Čísla, která už nese jiný řádek (rozpoznaný parserem), se přeskočí — žádné duplicity.
+  // Číslo, které RUČNĚ napíšeš do některého řádku, je kotva: prázdné pod ním pokračují
+  // od něj +1 (např. balík jen s díly 4–12 → napiš 4 do prvního a klikni znovu).
+  // Rozpoznané řádky kotvou nejsou — jeden „cizí" soubor (třeba díl 13 jinak pojmenovaný)
+  // by jinak posunul celé číslování.
+  function ocislujPostupne(rows) {
+    const obsazene = new Set(polozky.map(dilPolozky).filter((x) => x != null));
+    const dily = rows.map((r) => r.episode).filter((x) => x != null);
+    let dalsi = dily.length ? Math.min(...dily) : 1;
+    for (const it of polozky) {
+      const ep = dilPolozky(it);
+      if (ep != null) {
+        if (it.epManual != null && !it.auto) dalsi = ep + 1; // ruční kotva
+        continue;
+      }
+      while (obsazene.has(dalsi)) dalsi++;
+      it.epManual = dalsi;
+      it.auto = true;
+      obsazene.add(dalsi);
+      dalsi++;
+    }
+  }
+
   sel.onchange = prepocti;
   prepocti();
 

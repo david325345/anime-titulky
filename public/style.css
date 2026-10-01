@@ -346,6 +346,10 @@ button.bulk-upload:disabled { opacity: .4; cursor: default; }
   border: 1px solid #55471f; background: rgba(224,180,87,.08); border-radius: 8px;
   font-size: 13px; color: #e0b457; }
 .bulk-offset button { padding: 3px 10px; font-size: 13px; border-radius: 6px; }
+/* „Očíslovat postupně" — vlastní řádek v témže žlutém boxu */
+.bulk-offset { flex-wrap: wrap; }
+.bulk-autonum { display: flex; align-items: center; gap: 10px; flex-basis: 100%; }
+.bulk-ep.bulk-ep-auto { border-color: #f0c674; color: #f0c674; }
 
 /* průběh hromadného nahrání — samostatný řádek, ať se nic neořízne */
 .edit-modal-actions button { white-space: nowrap; flex-shrink: 0; }
