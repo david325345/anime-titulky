@@ -311,6 +311,10 @@ export const markDownloaded = (row) =>
   _markDownloaded.run({ downloaded_at: new Date().toISOString(), unused_variants: null, ...row });
 export const markFailed = (sub_id, error) =>
   _markFailed.run({ sub_id, error: String(error).slice(0, 500) });
+// titulek na zdroji ještě není → nechat ve frontě, jen poznamenat proč
+export const markWaiting = (sub_id, error) =>
+  db.prepare("UPDATE subs SET status='pending_extern', error=? WHERE sub_id=?")
+    .run(String(error).slice(0, 500), sub_id);
 
 export const getSub = (id) => db.prepare('SELECT * FROM subs WHERE sub_id=?').get(id);
 
