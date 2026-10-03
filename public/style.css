@@ -202,6 +202,9 @@ tr.machine-row a { color: #9fd8ff; }
 .bd-modal-hint { margin: 0 0 12px; font-size: 13px; color: var(--muted); line-height: 1.4; }
 .bd-modal-status { min-height: 18px; margin: 0 0 12px; font-size: 13px; color: var(--accent); }
 .bd-modal .edit-modal-actions { flex-wrap: wrap; gap: 8px; }
+/* úprava titulku: „Uložit pro celou sadu“ na vlastním řádku nad Zrušit/Uložit */
+#editModal .edit-modal-actions { flex-wrap: wrap; }
+#editModal #edit-save-set { order: -1; flex-basis: 100%; }
 .machine-dl { font-size: 12px; color: var(--accent); text-decoration: none; }
 .machine-dl:hover { text-decoration: underline; }
 button.bd-resync { cursor: pointer; }

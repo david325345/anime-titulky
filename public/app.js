@@ -382,6 +382,19 @@ $('#searchInput').addEventListener('input', (e) => {
 
 // mazání (delegace na tabulce)
 // modal pro editaci metadat (jeden formulář: Fansub, Release, Jazyk)
+// [1,2,3,5,7,8] → „1–3, 5, 7–8"
+function dilyRozsah(eps) {
+  const xs = [...new Set(eps.filter((x) => x != null))].sort((a, b) => a - b);
+  const out = [];
+  for (let i = 0; i < xs.length; i++) {
+    let j = i;
+    while (j + 1 < xs.length && xs[j + 1] === xs[j] + 1) j++;
+    out.push(i === j ? `${xs[i]}` : `${xs[i]}–${xs[j]}`);
+    i = j;
+  }
+  return out.join(', ') || '—';
+}
+
 function openEditModal(ed) {
   const id = ed.dataset.id;
   // odstraň případný předchozí
@@ -411,6 +424,7 @@ function openEditModal(ed) {
       </label>
       <div class="edit-modal-actions">
         <button type="button" class="btn-secondary" id="edit-cancel">Zrušit</button>
+        <button type="button" id="edit-save-set" hidden>Uložit pro celou sadu</button>
         <button type="button" id="edit-save">Uložit</button>
       </div>
     </div>`;
@@ -420,6 +434,48 @@ function openEditModal(ed) {
   overlay.addEventListener('click', (ev) => { if (ev.target === overlay) close(); });
   document.getElementById('edit-cancel').addEventListener('click', close);
   document.getElementById('edit-group').focus();
+
+  const formData = () => ({
+    group_name: document.getElementById('edit-group').value.trim(),
+    release: document.getElementById('edit-release').value.trim(),
+    lang: document.getElementById('edit-lang').value.trim().toUpperCase(),
+    quality: document.getElementById('edit-quality').value,
+  });
+
+  // Hromadně pro celou sadu (stejné anime + jazyk + skupina + release jako dnes tenhle díl)
+  const setBtn = document.getElementById('edit-save-set');
+  let sada = null;
+  fetch(`/api/sub/${id}/set`).then((r) => r.json()).then((d) => {
+    if (!d || d.error || !(d.count > 1) || !document.body.contains(setBtn)) return;
+    sada = d;
+    setBtn.textContent = `Uložit pro celou sadu (${d.count} dílů)`;
+    setBtn.hidden = false;
+  }).catch(() => {});
+  setBtn.addEventListener('click', async () => {
+    if (!sada) return;
+    const popis = (m) => Object.entries(m).sort((a, b) => b[1] - a[1])
+      .map(([k, n]) => `„${k}" ×${n}`).join(', ');
+    const ok = confirm(
+      `Přepsat skupinu / release / jazyk / kvalitu u ${sada.count} dílů (${dilyRozsah(sada.episodes)})?\n\n` +
+      `Dnes skupina: ${popis(sada.groups)}\nDnes release: ${popis(sada.releases)}\n\n` +
+      `U jejich přečasů se přepíše i skupina a jazyk.`
+    );
+    if (!ok) return;
+    setBtn.disabled = true;
+    setBtn.textContent = 'Ukládám…';
+    try {
+      const r = await (await fetch(`/api/sub/${id}/set`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(formData()),
+      })).json();
+      if (r.ok) { close(); loadSubs(); }
+      else { alert('Úprava selhala: ' + (r.error || 'neznámá chyba')); setBtn.disabled = false; setBtn.textContent = `Uložit pro celou sadu (${sada.count} dílů)`; }
+    } catch (err) {
+      alert('Chyba: ' + err.message);
+      setBtn.disabled = false; setBtn.textContent = `Uložit pro celou sadu (${sada.count} dílů)`;
+    }
+  });
 
   document.getElementById('edit-save').addEventListener('click', async () => {
     const saveBtn = document.getElementById('edit-save');
