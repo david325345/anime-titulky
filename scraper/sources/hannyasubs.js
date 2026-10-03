@@ -6,9 +6,16 @@
 //
 // hiyori u těchto titulků odkazuje na blogspot ČLÁNEK (ne přímo na soubor),
 // takže z něj podle čísla epizody vytáhneme správný MEGA odkaz.
+//
+// MEGA soubor bývá i ZIP (na blogu „(Full i Split)" / „(Split)"):
+//   full/   … celý díl v jednom .ass           → bereme tohle
+//   split/  … díl rozdělený na 2 segmenty (S01Exx = 1. půlka, S00Exx = 2. půlka),
+//             každý časovaný od 0:00 (pro releasy, které díl vydávají jako 2 videa)
+//             → automaticky nejde spojit (neznámý posun) → chyba, nahrát ručně.
 
 import * as cheerio from 'cheerio';
 import { File as MegaFile } from 'megajs';
+import AdmZip from 'adm-zip';
 import { saveSubFile } from '../download.js';
 import { CONFIG } from '../../config.js';
 import { hostGate } from '../ratelimit.js';
@@ -40,8 +47,18 @@ async function fetchArticle(articleUrl) {
   }
 }
 
-// z blogspot článku udělá mapu {episode: megaUrl}
+// z blogspot článku udělá mapu {episode: megaUrl}. Výsledek si pamatuje 15 min —
+// víc dílů téhož anime v jednom běhu = jeden dotaz na Blogspot (ten rád hází 429).
+const ARTICLE_TTL_MS = 15 * 60 * 1000;
+const articleCache = new Map(); // url -> { at, map }
 async function episodeMap(articleUrl) {
+  const hit = articleCache.get(articleUrl);
+  if (hit && Date.now() - hit.at < ARTICLE_TTL_MS) return hit.map;
+  const map = await parseArticle(articleUrl);
+  articleCache.set(articleUrl, { at: Date.now(), map });
+  return map;
+}
+async function parseArticle(articleUrl) {
   const html = await fetchArticle(articleUrl);
   const $ = cheerio.load(html);
 
@@ -72,6 +89,35 @@ async function megaDownload(megaUrl) {
   return { buf: Buffer.concat(chunks), name: file.name };
 }
 
+const SUB_RE = /\.(ass|ssa|srt)$/i;
+const isZip = (b) => b.length > 4 && b[0] === 0x50 && b[1] === 0x4b; // "PK"
+const isRar = (b) => b.slice(0, 4).toString('latin1') === 'Rar!';
+const is7z = (b) => b.length > 2 && b[0] === 0x37 && b[1] === 0x7a; // "7z"
+
+// MEGA vrátí buď rovnou titulek, nebo ZIP → vyber z něj ten správný .ass
+function pickSubtitle(buf, megaName, episode) {
+  if (isRar(buf) || is7z(buf)) {
+    throw new Error(`HannyaSubs: na MEGA je archiv ${isRar(buf) ? 'RAR' : '7z'} (${megaName}) — zatím neumím rozbalit, nahraj ručně.`);
+  }
+  if (!isZip(buf)) return { data: buf, name: megaName };
+
+  const subs = new AdmZip(buf).getEntries()
+    .filter((e) => !e.isDirectory && SUB_RE.test(e.entryName))
+    .map((e) => ({ path: e.entryName.replace(/\\/g, '/'), entry: e }));
+  const inFull = subs.filter((x) => /(^|\/)full\//i.test(x.path));
+  const inSplit = subs.filter((x) => /(^|\/)split\//i.test(x.path));
+  let pick = null;
+  if (inFull.length === 1) pick = inFull[0];                      // 1) celý díl
+  else if (subs.length === 1) pick = subs[0];                     // 2) jediný titulek v archivu
+  else if (!inFull.length && inSplit.length && inSplit.length === subs.length) {
+    throw new Error(`HannyaSubs: díl ${episode} je jen ve split verzi (rozdělený na 2 části: ${inSplit.map((x) => x.path.split('/').pop()).join(' + ')}) — nahraj ručně.`);
+  }
+  if (!pick) {
+    throw new Error(`HannyaSubs: v archivu ${megaName} nevím, který titulek vzít (${subs.map((x) => x.path).join(', ') || 'žádný .ass/.srt'}) — nahraj ručně.`);
+  }
+  return { data: pick.entry.getData(), name: pick.path.split('/').pop() };
+}
+
 // hlavní vstup dispatcheru. Uloží soubor a vrátí {filename, local_path, file_bytes}.
 export async function download(sub) {
   let megaUrl;
@@ -88,6 +134,7 @@ export async function download(sub) {
   }
 
   const { buf, name: megaName } = await megaDownload(megaUrl);
-  const rawName = megaName || `hannyasubs-ep${sub.episode || '?'}.ass`;
-  return saveSubFile(sub, buf, rawName);
+  const { data, name } = pickSubtitle(buf, megaName || '?', sub.episode);
+  const rawName = name && SUB_RE.test(name) ? name : `hannyasubs-ep${sub.episode || '?'}.ass`;
+  return saveSubFile(sub, data, rawName);
 }
