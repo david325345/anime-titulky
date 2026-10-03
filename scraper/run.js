@@ -296,6 +296,8 @@ async function downloadQueue({ log, stats }) {
   const candidates = getDownloadCandidates(500);
   const perHost = new Map();
   const hostOf = (s) => (s.kind === 'direct' ? 'hiyori.cz' : s.extern_domain || '?');
+  // limit per web: výjimka z CONFIG.maxDownloadsPerHostOverrides, jinak společný
+  const hostLimit = (h) => CONFIG.maxDownloadsPerHostOverrides?.[h] ?? CONFIG.maxDownloadsPerHost;
   const batch = [];
 
   for (const s of candidates) {
@@ -303,7 +305,7 @@ async function downloadQueue({ log, stats }) {
     if (s.kind === 'extern' && !hasSourceFor(s.extern_domain)) continue;
     const host = hostOf(s);
     const used = perHost.get(host) || 0;
-    if (used >= CONFIG.maxDownloadsPerHost) continue;
+    if (used >= hostLimit(host)) continue;
     perHost.set(host, used + 1);
     batch.push(s.sub_id);
   }
@@ -315,7 +317,7 @@ async function downloadQueue({ log, stats }) {
   const perHostSummary = [...perHost.entries()].map(([h, n]) => `${h}:${n}`).join(', ');
   log(
     `Ke stažení teď: ${batch.length}` +
-    (perHostSummary ? ` (max ${CONFIG.maxDownloadsPerHost}/web — ${perHostSummary})` : '')
+    (perHostSummary ? ` (max ${CONFIG.maxDownloadsPerHost}/web, výjimky: ${Object.entries(CONFIG.maxDownloadsPerHostOverrides || {}).map(([h, n]) => `${h}=${n}`).join(', ') || '—'} — ${perHostSummary})` : '')
   );
 
   // weby, kde v TOMTO běhu vypršel login/cookie → zbytek té domény přeskočíme
