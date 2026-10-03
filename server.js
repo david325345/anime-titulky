@@ -12,7 +12,7 @@ import {
   machineVersionsFor, getAkiSub, bulkBdTargetsHiyori, bulkBdTargetsAki, getBdPin, clearBdPin,
   insertRequest, listRequests, getRequest, setRequestStatus, requestStatusForAnilist,
   subsByAnime,
-  backfillQuality, migrateMachineIds,
+  backfillQuality, migrateMachineIds, subSetSiblings, updateSubMetaMany,
 } from './db.js';
 import { classifyQuality, releaseGroups } from './scraper/quality.js';
 import * as hanabi from './scraper/sources/hanabi.js';
@@ -664,6 +664,42 @@ app.patch('/api/sub/:subId', requireUser1, express.json(), (req, res) => {
     quality: norm(quality), // vyplněná = ruční volba → zamkne se
   });
   res.json({ ok: n > 0 });
+});
+
+// ── Hromadný edit celé sady (stejné anime + jazyk + skupina + release) ──
+// GET  → kolik dílů sada má + jejich dnešní hodnoty (pro potvrzovací dotaz)
+// PATCH → přepíše skupinu/release/jazyk/kvalitu u všech dílů sady najednou
+app.get('/api/sub/:subId/set', requireUser1, (req, res) => {
+  const rows = subSetSiblings(Number(req.params.subId));
+  if (!rows) return res.status(404).json({ error: 'Záznam nenalezen.' });
+  const counts = (pick) => {
+    const m = {};
+    for (const r of rows) { const k = pick(r) || '—'; m[k] = (m[k] || 0) + 1; }
+    return m;
+  };
+  res.json({
+    count: rows.length,
+    episodes: rows.map((r) => r.episode),
+    releases: counts((r) => r.release),
+    groups: counts((r) => r.group_name),
+  });
+});
+app.patch('/api/sub/:subId/set', requireUser1, express.json(), (req, res) => {
+  const rows = subSetSiblings(Number(req.params.subId));
+  if (!rows) return res.status(404).json({ ok: false, error: 'Záznam nenalezen.' });
+  const norm = (v) => {
+    if (v == null) return null;
+    const t = String(v).trim();
+    return t === '' ? null : t;
+  };
+  const { group_name, release, lang, quality } = req.body || {};
+  const r = updateSubMetaMany(rows.map((x) => x.sub_id), {
+    group_name: norm(group_name),
+    release: norm(release),
+    lang: norm(lang),
+    quality: norm(quality),
+  });
+  res.json({ ok: r.updated > 0, ...r });
 });
 
 // (pře)plánování hodinového intervalu — resetuje se při každém ručním spuštění.

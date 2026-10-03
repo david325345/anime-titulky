@@ -397,6 +397,55 @@ export const updateSubMeta = (sub_id, { group_name, release, lang, quality }) =>
     quality_locked: quality ? 1 : 0,
   }).changes;
 
+// ── Sada titulků (hromadný edit) ─────────────────────────────────────────
+// Sada = záznamy téhož anime se stejným jazykem + skupinou + NORMALIZOVANÝM release.
+// Normalizace MUSÍ odpovídat bulkRelKey/bulkSetKey v public/app.js (dialog 📦),
+// ať „sada" znamená na obou místech totéž.
+export function setRelKey(s) {
+  let t = String(s || '').trim();
+  t = t.replace(/\.(ass|srt|ssa|sub|vtt|mkv|mp4)$/i, '');
+  t = t.replace(/\[[0-9A-Fa-f]{8}\]/g, ' ');
+  const zavorka = t.match(/^\s*\[([^\]]+)\]/);
+  if (zavorka && /[a-z]/i.test(zavorka[1])) t = zavorka[1];
+  t = t.replace(/\s[-–]\s*\d{1,4}(v\d)?\b.*$/i, ' ');
+  return t
+    .replace(/[([{][^)\]}]*[)\]}]/g, ' ')
+    .replace(/\b\d{3,4}p\b/gi, ' ')
+    .replace(/\b(x?26[45]|hevc|avc|10bit|8bit|web-?dl|web-?rip|web|bd-?rip|bd|blu-?ray|dvd-?rip|dvd|remux)\b/gi, ' ')
+    .toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+export const setKeyOf = (r) =>
+  [(r.lang || '').toUpperCase(), (r.group_name || '').trim().toLowerCase(), setRelKey(r.release)].join(' ¦ ');
+
+// všechny (nestrojové) záznamy ze stejné sady jako sub_id — včetně něj
+export function subSetSiblings(subId) {
+  const sub = getSub(subId);
+  if (!sub) return null;
+  const [col, val] = sub.hiyori_id ? ['hiyori_id', sub.hiyori_id]
+    : sub.anilist_id ? ['anilist_id', sub.anilist_id]
+    : sub.mal_id ? ['mal_id', sub.mal_id] : ['sub_id', sub.sub_id];
+  const key = setKeyOf(sub);
+  return db
+    .prepare(`SELECT sub_id, episode, lang, group_name, release, status FROM subs
+              WHERE ${col}=? AND machine_of IS NULL ORDER BY episode, sub_id`)
+    .all(val)
+    .filter((r) => setKeyOf(r) === key);
+}
+
+// přepíše metadata u víc záznamů najednou (jedna transakce). Strojovým verzím
+// (přečasům) těchto záznamů přepíše skupinu a jazyk — ty se ve Stremiu ukazují.
+export const updateSubMetaMany = db.transaction((ids, meta) => {
+  let n = 0;
+  for (const id of ids) n += updateSubMeta(id, meta);
+  const updMachine = db.prepare(
+    `UPDATE subs SET group_name=@group_name, lang=@lang
+      WHERE machine_of=@id AND (machine_source IS NULL OR machine_source='hiyori')`
+  );
+  let m = 0;
+  for (const id of ids) m += updMachine.run({ id, group_name: meta.group_name ?? null, lang: meta.lang ?? null }).changes;
+  return { updated: n, machine: m };
+});
+
 // --- runs ---
 const _startRun = db.prepare(
   'INSERT INTO runs(started_at,ok) VALUES(?,0)'
