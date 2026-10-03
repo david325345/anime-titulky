@@ -3,6 +3,17 @@
 
 import path from 'node:path';
 
+// "web:N,web2:M" → { web: N, web2: M }; prázdné/neplatné env → výchozí mapa
+function parseHostMap(env, defaults) {
+  if (!env || !String(env).trim()) return defaults;
+  const out = {};
+  for (const part of String(env).split(',')) {
+    const [h, n] = part.split(':').map((x) => (x || '').trim());
+    if (h && Number.isFinite(Number(n))) out[h.replace(/^www\./, '')] = Number(n);
+  }
+  return Object.keys(out).length ? out : defaults;
+}
+
 export const CONFIG = {
   // přihlášení do hiyori (nastav v Coolify: HIYORI_USER / HIYORI_PASS)
   user: process.env.HIYORI_USER || '',
@@ -36,6 +47,16 @@ export const CONFIG = {
 
   // limit stažených titulků z JEDNOHO webu za běh (per-doména)
   maxDownloadsPerHost: Number(process.env.MAX_DOWNLOADS_PER_HOST || 2),
+  // výjimky limitu pro konkrétní weby. Env: PER_HOST_DOWNLOAD_OVERRIDES="web:N,web2:M"
+  // (env nahradí výchozí seznam celý)
+  maxDownloadsPerHostOverrides: parseHostMap(process.env.PER_HOST_DOWNLOAD_OVERRIDES, {
+    'hannya-subs.blogspot.com': 6,
+  }),
+  // výjimky rozestupu mezi requesty (ms) pro přísnější weby (Blogspot hází 429).
+  // Env: PER_HOST_DELAY_OVERRIDES="web:ms,..." — čte scraper/ratelimit.js
+  perHostDelayOverrides: parseHostMap(process.env.PER_HOST_DELAY_OVERRIDES, {
+    'hannya-subs.blogspot.com': 10000,
+  }),
 
   // volitelný celkový strop za běh napříč všemi weby (0 = bez stropu)
   maxDownloadsPerRun: Number(process.env.MAX_DOWNLOADS_PER_RUN || 0),
