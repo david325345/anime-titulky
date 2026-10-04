@@ -294,7 +294,7 @@ function fitInBlock(part, bloky) {
   const inside = ok.length === part.length && ok.every((x) => x.ns >= blk.s - BLOCK_TOL && x.ns + capDur(x.s, x.e) <= blk.e + BLOCK_TOL);
   // změna, když alass část z bloku vystrčil (nebo ořízl), nebo když je v bloku výrazně líp
   const change = (!inside || best.v >= curIou + 0.1) && (was == null || Math.abs(off - was) > 300);
-  return { off, iou: best.v, curIou, was, blk, change, inside, rozpeti, refN };
+  return { off, iou: best.v, curIou, was, blk, change, inside, rozpeti, refN, lo, hi };
 }
 
 /**
@@ -304,7 +304,8 @@ function fitInBlock(part, bloky) {
  * @param refIv úseky replik reference [{s,e}] v ms (nebo null → bez ověření částí a skóre)
  * @returns {{output, notes:string[], warnings:string[], score:number|null}|null} null = výstup nesedí (zkus postaru)
  */
-export function finishCz(prep, outputText, refIv) {
+export function finishCz(prep, outputText, refIv, opts = {}) {
+  const forced = opts.forced || [];   // [{from, off, note}] — posun části určený podle zvuku
   const out = parseAss(String(outputText));
   if (!out) return null;
   const outEv = out.events;
@@ -338,6 +339,13 @@ export function finishCz(prep, outputText, refIv) {
     for (const part of parts) {
       const n = part.length;
       if (n < 4 || n > SHORT_PART) continue;
+      const od0 = Math.min(...part.map((x) => x.s));
+      const f = forced.find((q) => Math.abs(q.from - od0) < 1);
+      if (f) {                                   // posun určený podle zvuku (2. průchod)
+        for (const x of part) { x.ns = x.s + f.off; x.ne = x.e + f.off; }
+        notes.push(f.note);
+        continue;
+      }
       const r = fitInBlock(part, bloky);
       if (!r) continue;
       if (r.skip) { notes.push(r.skip); continue; }
@@ -355,7 +363,7 @@ export function finishCz(prep, outputText, refIv) {
       if (vazne.length) {
         const od = Math.min(...part.map((x) => x.s)), doo = Math.max(...part.map((x) => x.e));
         const pouzit = r.change || r.was == null ? r.off : r.was;          // posun, který opravdu platí
-        audioParts.push({ from: od, to: doo, n, off: pouzit, range: r.rozpeti, reasons: proc });
+        audioParts.push({ from: od, to: doo, n, off: pouzit, range: r.rozpeti, lo: r.lo, hi: r.hi, reasons: proc });
         warnings.push(`krátká část ${mmss(od)}–${mmss(doo)} (${n} replik, posun ${sec(pouzit)}): ${proc.join('; ')} — ` +
           `podle titulků nejde spolehlivě určit, zkontroluj (tady by pomohlo srovnání podle zvuku)`);
       }
@@ -401,6 +409,24 @@ export function finishCz(prep, outputText, refIv) {
     lines[x.li] = `${lead}${x.kind}: ${f.join(',')}`;
   }
   return { output: lines.join('\n'), notes, warnings, score, audioParts };
+}
+
+// Úloha pro službu audiosync: výřez zvuku kolem části (±10 s) v čase VIDEA a titulky
+// části s časy relativně k začátku výřezu (s dnešním posunem). Výsledný posun části
+// = ap.off + offset_ms z LAPSE.
+const AUDIO_PAD = 10000, AUDIO_MAX = 180000;
+export function audioJob(prep, ap) {
+  const lines = prep.kept.filter((x) => x.s >= ap.from && x.s <= ap.to).sort((a, b) => a.s - b.s);
+  if (lines.length < 3) return null;
+  const w0 = Math.max(0, ap.from + ap.off - AUDIO_PAD);
+  const w1 = Math.max(...lines.map((x) => x.e)) + ap.off + AUDIO_PAD;
+  if (w1 - w0 > AUDIO_MAX) return null;
+  const f = (v) => { v = Math.max(0, Math.round(v)); return `${pad(Math.floor(v / 3600000))}:${pad(Math.floor(v / 60000) % 60)}:${pad(Math.floor(v / 1000) % 60)},${pad(v % 1000, 3)}`; };
+  const srt = lines.map((x, i) => {
+    const txt = x.text.replace(/\{[^}]*\}/g, '').replace(/\\[Nn]/g, '\n').trim() || '.';
+    return `${i + 1}\n${f(x.s + ap.off - w0)} --> ${f(x.e + ap.off - w0)}\n${txt}\n`;
+  }).join('\n');
+  return { start_ms: Math.round(w0), dur_ms: Math.round(w1 - w0), srt, cues: lines.length };
 }
 
 /** Jen kontrola výsledku (SRT/postaru): porovná vstup a výstup replik po pořadí (+ skóre). */

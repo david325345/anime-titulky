@@ -16,7 +16,7 @@ import { CONFIG } from '../config.js';
 import { r2Enabled, r2Put, r2Get, r2PublicUrl, r2Delete } from '../r2.js';
 import { saveMachineSub, machineIdFor, getBdPref, setBdPref, getBdPin, setBdPin, getSub } from '../db.js';
 import { cachedHashes, episodeLink, readTimeline, pickDialogueTrack, timelineToSrt } from './torboxref.js';
-import { prepareCz, finishCz, checkOnly, intervalsOf, decodeText } from './czmask.js';
+import { prepareCz, finishCz, checkOnly, intervalsOf, decodeText, audioJob, mmss } from './czmask.js';
 
 // ── Indexer (self-signed cert → jen na tenhle host vypneme verifikaci) ──────
 const insecureAgent = new https.Agent({ rejectUnauthorized: false });
@@ -426,13 +426,25 @@ async function callSubsync(refBuf, refName, czBuf, czName) {
 // refIv = úseky replik reference [{s,e}] v ms (ověření částí, skóre shody), může být null.
 // Vrací tvar callSubsync + notes/warnings/score. Když maskovaná cesta nevyjde (SRT, málo
 // řádků, nesedí počet), přečasuje se postaru celý soubor a jen se zkontroluje.
-async function syncCz(refBuf, refName, cz, refIv) {
+async function syncCz(refBuf, refName, cz, refIv, media = null) {
   const prep = prepareCz(cz.czBuf, cz.czName);
   if (prep.mode === 'ass') {
     const sync = await callSubsync(refBuf, refName, prep.sendBuf, cz.czName);
     if (sync.ok && sync.output) {
-      const fin = finishCz(prep, String(sync.output), refIv);
-      if (fin) return { ...sync, output: fin.output, notes: fin.notes, warnings: fin.warnings, score: fin.score, audioParts: fin.audioParts };
+      let fin = finishCz(prep, String(sync.output), refIv);
+      if (fin) {
+        // krátké nejednoznačné části → zkus zvuk (audiosync) ze STEJNÉHO souboru
+        if (fin.audioParts.length && media && media.url && CONFIG.audiosync.enabled) {
+          const forced = [], extra = [];
+          for (const ap of fin.audioParts) {
+            const r = await audioForPart(prep, ap, media.url);
+            if (r.forced) forced.push(r.forced); else if (r.note) extra.push(r.note);
+          }
+          if (forced.length) fin = finishCz(prep, String(sync.output), refIv, { forced }) || fin;
+          fin.notes.push(...extra);
+        }
+        return { ...sync, output: fin.output, notes: fin.notes, warnings: fin.warnings, score: fin.score, audioParts: fin.audioParts };
+      }
       console.warn('[bdresync] maskovaný výstup alassu nesedí počtem replik → přečas postaru');
     } else if (sync.bad_input !== 'subtitle') {
       return sync;                                   // chyba reference/služby → stejná by byla i postaru
@@ -445,6 +457,38 @@ async function syncCz(refBuf, refName, cz, refIv) {
   }
   return sync;
 }
+
+// ── audiosync (LAPSE podle zvuku) pro jednu krátkou část ───────────────────
+// Výsledek se použije JEN když leží v povoleném bloku reference (verdiktu LAPSE
+// samotnému nevěříme — na PGS dal „solid" i posunu o 9 minut).
+async function audioForPart(prep, ap, url) {
+  const job = audioJob(prep, ap);
+  const kde = `úvod/část ${mmss(ap.from)}–${mmss(ap.to)}`;
+  const fmt = (v) => `${v >= 0 ? '+' : '−'}${Math.abs(v / 1000).toFixed(1).replace('.', ',')} s`;
+  if (!job) return { note: `${kde}: zvuk nezkoušen (část je moc dlouhá nebo má málo replik)` };
+  let j = null;
+  try {
+    const res = await fetch(`${CONFIG.audiosync.url}/audiosync`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, ...job }), signal: AbortSignal.timeout(200000),
+    });
+    j = await res.json().catch(() => null);
+  } catch (e) {
+    return { note: `${kde}: služba audiosync nedostupná (${e.message}) — ponechán posun podle titulků` };
+  }
+  if (!j || !j.ok) return { note: `${kde}: zvuk nevyšel (${(j && j.error) || 'neplatná odpověď'}) — ponechán posun podle titulků` };
+  if (j.verdict === 'nothing' || typeof j.offset_ms !== 'number') {
+    return { note: `${kde}: zvuk posun nepotvrdil (LAPSE: ${j.verdict}) — ponechán posun podle titulků` };
+  }
+  const off = Math.round(ap.off + j.offset_ms);
+  if (ap.lo != null && (off < ap.lo - 200 || off > ap.hi + 200)) {
+    return { note: `${kde}: zvuk dal ${fmt(off)}, to je mimo blok reference (${fmt(ap.lo)} … ${fmt(ap.hi)}) — nepoužito` };
+  }
+  return { forced: { from: ap.from, off,
+    note: `${kde} (${ap.n} replik) srovnán PODLE ZVUKU: ${fmt(off)} (titulky nejednoznačné ${fmt(ap.range[0])} … ${fmt(ap.range[1])}; ` +
+      `LAPSE ${j.verdict}, jistota ${Number(j.confidence || 0).toFixed(2)}, ${j.clip_kb} kB zvuku)` } };
+}
+
 // úseky replik reference z časové osy TorBoxu (Cues; bez délky → 2 s jako timelineToSrt)
 const refIvOfTrack = (track, scale) => (track && track.cues
   ? track.cues.map((c) => {
@@ -633,7 +677,7 @@ async function probeRelease(sub, rel) {
       return { ok: false, reason: pk.reason, msg: REASON_TXT[pk.reason] || pk.reason, file: L.file, tracks };
     }
     memoSet(sub.anilist_id, rel.at_id, { tier: pk.tier });
-    return { ok: true, file: L.file, pk, tl, tracks, kb: Math.round(tl.bytes / 1024) };
+    return { ok: true, file: L.file, pk, tl, tracks, kb: Math.round(tl.bytes / 1024), media: { url: L.url } };
   } catch (e) { return { ok: false, reason: 'error', msg: e.message, file: L.file }; }
   finally { await L.cleanup?.(); }
 }
@@ -691,7 +735,7 @@ async function resyncOnRelease(sub, source, infohash, { forced, pin }) {
 
   const cz = await loadCz(sub);
   if (!cz) return { ok: false, stage: 'cz', error: 'CZ titulek se nepodařilo stáhnout z R2.' };
-  const sync = await syncCz(timelineToSrt(p.pk.track, p.tl.scale), 'ref.srt', cz, refIvOfTrack(p.pk.track, p.tl.scale));
+  const sync = await syncCz(timelineToSrt(p.pk.track, p.tl.scale), 'ref.srt', cz, refIvOfTrack(p.pk.track, p.tl.scale), p.media);
   if (!(sync.ok && sync.output)) {
     if (sync.bad_input === 'subtitle') {
       return { ok: false, stage: 'cz', detail: sync,
@@ -802,13 +846,13 @@ export async function bdResync(sub, source = 'hiyori', opts = {}) {
           return null;
         }
         memoSet(sub.anilist_id, rel.at_id, { tier: pk.tier });
-        return { rel, file: L.file, pk, tl };
+        return { rel, file: L.file, pk, tl, media: { url: L.url } };
       } catch (e) { why.sourceError++; lastErr = e.message; return null; }
       finally { await L.cleanup(); }
     };
     const attempt = async (p, probed) => {
       tried++;
-      const sync = await syncCz(timelineToSrt(p.pk.track, p.tl.scale), 'ref.srt', cz, refIvOfTrack(p.pk.track, p.tl.scale));
+      const sync = await syncCz(timelineToSrt(p.pk.track, p.tl.scale), 'ref.srt', cz, refIvOfTrack(p.pk.track, p.tl.scale), p.media);
       if (sync.ok && sync.output) {
         const saved = await saveMachine(sub, sync.output, p.file, source, p.rel.kind, p.rel.group || null, p.rel.infohash);
         if (sub.anilist_id && via === 'indexer') setBdPref(sub.anilist_id, p.rel.at_id);
