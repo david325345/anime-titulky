@@ -30,7 +30,8 @@
 //  do 0,5 s i špatný posun (E7 úvod: −9,3 s trefil 5 z 8, správný jen 4).
 //  Celý soubor se pak složí z ORIGINÁLU (zachová styly, pořadí, formát řádků).
 
-const NOT_DIALOG = /sign|song|kara|\bop\b|\bed\b|title|note|typeset|lyric|credit|insert/i;
+// styly mimo dialog; OP/ED i ve tvaru „OPJP", „OPCZ", „ED-romaji" (Rosario), „Next Episode" = cedulka
+const NOT_DIALOG = /sign|song|kara|\bop\b|\bed\b|^(op|ed)(\d|[\W_]|jp|cz|sk|en|ro|kar|tl|$)|title|note|typeset|lyric|credit|insert|next ?ep|eyecatch/i;
 const SONG_GAP = 6000;        // řádky písně od sebe max. 6 s
 const SONG_MIN_LINES = 8;
 const SONG_MIN_LEN = 40000;   // ≥ 40 s
@@ -39,6 +40,8 @@ const SHORT_PART = 40;        // „krátká část" (úvod před openingem…) 
 const BLOCK_GAP = 30000;      // mezera ≥ 30 s bez titulků v referenci = hranice bloku (píseň)
 const BLOCK_TOL = 1000;       // část smí z bloku vyčnívat max. o 1 s
 const NEIGHBOR_MAX = 20000;   // krátká část se od posunu okolí smí lišit max. o 20 s (TV cedulka sponzorů ~10 s)
+const START_TOL = 300;        // začátek repliky „sedí" na začátek titulku reference do 0,3 s
+const START_STRONG = 0.6;     // …a jasně vede, když tak sedí ≥ 60 % replik části
 const AMBIG_RATIO = 0.9;      // posuny se shodou ≥ 90 % maxima…
 const AMBIG_SPREAD = 1000;    // …pokrývající víc než 1 s = titulky nerozhodnou (0,5 s hlásilo i LvB E3 ±0,3 s)
 const SCORE_WARN = Number(process.env.BD_SCORE_WARN) || 1.2;    // shoda < 1,2× náhodná → ⚠ (doladit podle reálných dílů)
@@ -256,7 +259,7 @@ function iouWith(pairs, blk, czDur) {
 // nb = posun nejbližší DLOUHÉ části (okolí). Krátká část se od něj nesmí odtrhnout
 // o víc než NEIGHBOR_MAX (Rosario to Vampire E1: upoutávka za endingem, kterou BD
 // nemá → blok daleko, rozsah −67 … −7 s, zvuk dal nesmysl −51,6 s při okolí 0 s).
-function fitInBlock(part, bloky, nb = null) {
+function fitInBlock(part, bloky, nb = null, refStarts = null) {
   if (!bloky.length) return null;
   const ok = part.filter((x) => x.ns >= 0);
   const ds = ok.map((x) => x.ns - x.s).sort((a, b) => a - b);
@@ -290,19 +293,44 @@ function fitInBlock(part, bloky, nb = null) {
     else if (Math.abs(v - best.v) <= 1e-9) best.plato.push(off);
   }
   if (!best) return null;                                  // alass je mimo blok o víc než 30 s → nesahám
-  const off = best.plato[best.plato.length >> 1];
+  let off = best.plato[best.plato.length >> 1];
+  // ZAČÁTKY REPLIK: když je CZ přeložené ze stejného dělení jako reference (ASS),
+  // začátky sedí na desetiny (Rosario E1 upoutávka: 6 z 6 do 0,3 s při posunu 0,
+  // překryv byl plochý −37 … +1,5 s kvůli textům endingu a 15s titulku v referenci).
+  // Použije se jen když jasně vede (≥ 60 % replik); jinak (PGS, jiné dělení) ne.
+  let starts = null;
+  if (refStarts && refStarts.length) {
+    const firstS = base.map((x) => x.s);
+    const hitAt = (o) => { let h = 0, j = 0; for (const t of firstS) { const v = t + o; while (j < refStarts.length && refStarts[j] < v - START_TOL) j++; if (j < refStarts.length && Math.abs(refStarts[j] - v) <= START_TOL) h++; } return h; };
+    let hmax = -1, hs = [];
+    for (const [o] of krivka) { const h = hitAt(o); if (h > hmax) { hmax = h; hs = [o]; } else if (h === hmax) hs.push(o); }
+    if (hmax >= Math.max(3, Math.ceil(base.length * START_STRONG))) {
+      const kotva0 = anchor ?? 0;
+      const plata = [];
+      for (const o of hs) { const q = plata[plata.length - 1]; if (q && o - q[q.length - 1] <= 100) q.push(o); else plata.push([o]); }
+      const pl = plata.reduce((a, b) => (Math.abs(b[b.length >> 1] - kotva0) < Math.abs(a[a.length >> 1] - kotva0) ? b : a));
+      off = pl[pl.length >> 1];
+      starts = { hit: hmax, n: base.length };
+    }
+  }
   // NEJEDNOZNAČNOST: posuny se shodou ≥ 90 % maxima — když pokrývají víc než 0,5 s,
   // titulky samy nerozhodnou (LvB E7 úvod: plochá shoda −1,9 … +1,6 s)
   const dobre = krivka.filter(([, v]) => v >= best.v * AMBIG_RATIO).map(([o]) => o);
-  const rozpeti = dobre.length ? [Math.min(...dobre), Math.max(...dobre)] : [off, off];
+  const rozpeti = starts ? [off, off] : dobre.length ? [Math.min(...dobre), Math.max(...dobre)] : [off, off];
   // kolik titulků reference v místě části je (BD tam může mlčet / mít jen cedulky)
-  const refN = blk.iv.filter((r) => r.e > first + off && r.s < lastEnd + off).length;
+  // (počítá se z jednotlivých titulků reference, ne ze sjednocených úseků — ty slepí
+  //  hustý konec dílu do jednoho kusu a vyšlo by „1 titulek na 6 replik")
+  const refN = refStarts && refStarts.length
+    ? refStarts.filter((t) => t >= first + off - 500 && t <= lastEnd + off).length
+    : blk.iv.filter((r) => r.e > first + off && r.s < lastEnd + off).length;
   const curPairs = ok.sort((x, y) => x.ns - y.ns).map((x) => [x.ns, x.ns + capDur(x.s, x.e)]);
   const curIou = iouWith(curPairs, blk, czDur);
   const inside = ok.length === part.length && ok.every((x) => x.ns >= blk.s - BLOCK_TOL && x.ns + capDur(x.s, x.e) <= blk.e + BLOCK_TOL);
   // změna, když alass část z bloku vystrčil (nebo ořízl), nebo když je v bloku výrazně líp
-  const change = (!inside || best.v >= curIou + 0.1) && (was == null || Math.abs(off - was) > 300);
-  return { off, iou: best.v, curIou, was, blk, change, inside, rozpeti, refN, lo, hi };
+  const odtrzeny = was != null && nb != null && Math.abs(was - nb) > NEIGHBOR_MAX;   // alass část utrhl od okolí
+  const change = (!inside || odtrzeny || starts || best.v >= curIou + 0.1) && (was == null || Math.abs(off - was) > 300);
+  const iouOff = krivka.find(([o]) => o === off)?.[1] ?? best.v;
+  return { off, iou: iouOff, curIou, was, blk, change, inside, rozpeti, refN, lo, hi, starts };
 }
 
 /**
@@ -344,6 +372,8 @@ export function finishCz(prep, outputText, refIv, opts = {}) {
   const audioParts = [];
   if (ref) {
     const bloky = blocksOf(ref);
+    // začátky titulků reference bez titulků/karaoke (< 0,25 s nebo > 8 s)
+    const refStarts = (refIv || []).filter((x) => x.e - x.s >= 250 && x.e - x.s <= 8000).map((x) => x.s).sort((a, b) => a - b);
     // posun okolí = medián posunu nejbližší dlouhé části
     const medShift = (pt) => { const d = pt.filter((x) => x.ns >= 0).map((x) => x.ns - x.s).sort((a, b) => a - b); return d.length ? d[d.length >> 1] : null; };
     const dlouhe = parts.filter((pt) => pt.length > SHORT_PART).map((pt) => ({ s: Math.min(...pt.map((x) => x.s)), e: Math.max(...pt.map((x) => x.e)), d: medShift(pt) })).filter((x) => x.d != null);
@@ -364,7 +394,7 @@ export function finishCz(prep, outputText, refIv, opts = {}) {
         continue;
       }
       const nb = okoli(part);
-      const r = fitInBlock(part, bloky, nb);
+      const r = fitInBlock(part, bloky, nb, refStarts);
       if (!r) continue;
       if (r.skip) { notes.push(r.skip); continue; }
       if (r.noFit || r.refN === 0) {
@@ -382,7 +412,8 @@ export function finishCz(prep, outputText, refIv, opts = {}) {
       if (r.change) {
         for (const x of part) { x.ns = x.s + r.off; x.ne = x.e + r.off; }
         notes.push(`část ${mmss(part[0].s)}–${mmss(part[n - 1].s)} (${n} replik): posun ${r.was != null ? `opraven z ${sec(r.was)} ` : ''}na ${sec(r.off)} ` +
-          `(musí ležet v bloku reference ${mmss(r.blk.s)}–${mmss(r.blk.e)}; shoda ${pct(r.curIou)} → ${pct(r.iou)})`);
+          (r.starts ? `(začátky ${r.starts.hit} z ${r.starts.n} replik sedí na titulky reference do 0,3 s)`
+            : `(musí ležet v bloku reference ${mmss(r.blk.s)}–${mmss(r.blk.e)}; shoda ${pct(r.curIou)} → ${pct(r.iou)})`));
       }
       // jen „vystrčeno z bloku" po opravě už nevadí; nejednoznačnost a řídká reference ano
       const vazne = proc.filter((t) => !/vystrčil/.test(t));
