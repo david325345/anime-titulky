@@ -16,6 +16,7 @@ import { CONFIG } from '../config.js';
 import { r2Enabled, r2Put, r2Get, r2PublicUrl, r2Delete } from '../r2.js';
 import { saveMachineSub, machineIdFor, getBdPref, setBdPref, getBdPin, setBdPin, getSub } from '../db.js';
 import { cachedHashes, episodeLink, readTimeline, pickDialogueTrack, timelineToSrt } from './torboxref.js';
+import { prepareCz, finishCz, checkOnly, startsOf, decodeText } from './czmask.js';
 
 // ── Indexer (self-signed cert → jen na tenhle host vypneme verifikaci) ──────
 const insecureAgent = new https.Agent({ rejectUnauthorized: false });
@@ -421,6 +422,34 @@ async function callSubsync(refBuf, refName, czBuf, czName) {
   return json;
 }
 
+// CZ → alass s vyřazenými písněmi/cedulkami (czmask.js) → dočištění + kontrola.
+// refStarts = začátky replik reference v ms (ověření částí mezi písněmi), může být null.
+// Vrací tvar callSubsync + notes/warnings. Když maskovaná cesta nevyjde (SRT, málo
+// řádků, nesedí počet), přečasuje se postaru celý soubor a jen se zkontroluje.
+async function syncCz(refBuf, refName, cz, refStarts) {
+  const prep = prepareCz(cz.czBuf, cz.czName);
+  if (prep.mode === 'ass') {
+    const sync = await callSubsync(refBuf, refName, prep.sendBuf, cz.czName);
+    if (sync.ok && sync.output) {
+      const fin = finishCz(prep, String(sync.output), refStarts);
+      if (fin) return { ...sync, output: fin.output, notes: fin.notes, warnings: fin.warnings };
+      console.warn('[bdresync] maskovaný výstup alassu nesedí počtem replik → přečas postaru');
+    } else if (sync.bad_input !== 'subtitle') {
+      return sync;                                   // chyba reference/služby → stejná by byla i postaru
+    }
+  }
+  const sync = await callSubsync(refBuf, refName, cz.czBuf, cz.czName);
+  if (sync.ok && sync.output) return { ...sync, notes: [], warnings: checkOnly(cz.czBuf, sync.output) };
+  return sync;
+}
+const refStartsOfTrack = (track, scale) =>
+  (track && track.cues ? track.cues.map((c) => Math.round((c.t * scale) / 1e6)) : null);
+function refStartsOfBuf(buf) {
+  if (!buf || !buf.length) return null;
+  if (buf[0] === 0xfd && buf[1] === 0x37) return null;          // .xz (Tosho) — nerozbalujeme
+  try { const st = startsOf(decodeText(buf)); return st.length ? st : null; } catch { return null; }
+}
+
 // ── uložení strojové verze ──────────────────────────────────────────────────
 function baseNameOf(sub) {
   return (sub.filename || `sub-${sub.sub_id}.ass`)
@@ -519,7 +548,7 @@ async function loadCz(sub) {
 async function resyncAndSave(sub, refBuf, refName, releaseTitle, source, kind = '🤖 BD') {
   const cz = await loadCz(sub);
   if (!cz) return { ok: false, stage: 'cz', error: 'CZ titulek se nepodařilo stáhnout z R2.' };
-  const sync = await callSubsync(refBuf, refName, cz.czBuf, cz.czName);
+  const sync = await syncCz(refBuf, refName, cz, refStartsOfBuf(refBuf));
   if (!sync.ok || !sync.output) {
     return { ok: false, stage: 'subsync', error: sync.message || 'Přečas selhal.', detail: sync };
   }
@@ -528,6 +557,7 @@ async function resyncAndSave(sub, refBuf, refName, releaseTitle, source, kind = 
     ok: true, kind, release: releaseTitle, episode: sub.episode,
     format: sync.format, elapsed_ms: sync.elapsed_ms,
     machine_sub_id: saved.machineId, file_bytes: saved.bytes,
+    notes: sync.notes || [], warnings: sync.warnings || [],
   };
 }
 
@@ -653,7 +683,7 @@ async function resyncOnRelease(sub, source, infohash, { forced, pin }) {
 
   const cz = await loadCz(sub);
   if (!cz) return { ok: false, stage: 'cz', error: 'CZ titulek se nepodařilo stáhnout z R2.' };
-  const sync = await callSubsync(timelineToSrt(p.pk.track, p.tl.scale), 'ref.srt', cz.czBuf, cz.czName);
+  const sync = await syncCz(timelineToSrt(p.pk.track, p.tl.scale), 'ref.srt', cz, refStartsOfTrack(p.pk.track, p.tl.scale));
   if (!(sync.ok && sync.output)) {
     if (sync.bad_input === 'subtitle') {
       return { ok: false, stage: 'cz', detail: sync,
@@ -668,6 +698,7 @@ async function resyncOnRelease(sub, source, infohash, { forced, pin }) {
     seeders: rel.seeders, episode: sub.episode, format: sync.format, elapsed_ms: sync.elapsed_ms,
     machine_sub_id: saved.machineId, file_bytes: saved.bytes, tried: 1,
     ref_source: 'torbox', ref_track: p.pk.why, ref_kb: p.kb, pin_label: rel.name,
+    notes: sync.notes || [], warnings: sync.warnings || [],
   };
 }
 
@@ -769,7 +800,7 @@ export async function bdResync(sub, source = 'hiyori', opts = {}) {
     };
     const attempt = async (p, probed) => {
       tried++;
-      const sync = await callSubsync(timelineToSrt(p.pk.track, p.tl.scale), 'ref.srt', cz.czBuf, cz.czName);
+      const sync = await syncCz(timelineToSrt(p.pk.track, p.tl.scale), 'ref.srt', cz, refStartsOfTrack(p.pk.track, p.tl.scale));
       if (sync.ok && sync.output) {
         const saved = await saveMachine(sub, sync.output, p.file, source, p.rel.kind, p.rel.group || null, p.rel.infohash);
         if (sub.anilist_id && via === 'indexer') setBdPref(sub.anilist_id, p.rel.at_id);
@@ -778,6 +809,7 @@ export async function bdResync(sub, source = 'hiyori', opts = {}) {
           episode: sub.episode, format: sync.format, elapsed_ms: sync.elapsed_ms,
           machine_sub_id: saved.machineId, file_bytes: saved.bytes, tried,
           ref_source: 'torbox', ref_track: p.pk.why, ref_kb: Math.round(p.tl.bytes / 1024), probed,
+          notes: sync.notes || [], warnings: sync.warnings || [],
         } };
       }
       if (sync.bad_input === 'subtitle') return { done: czBroken(sync) };
@@ -838,7 +870,7 @@ export async function bdResync(sub, source = 'hiyori', opts = {}) {
         tried++;
         let refXz;
         try { refXz = await downloadAttachXz(attId); } catch { continue; }
-        const sync = await callSubsync(refXz, 'ref.xz', cz.czBuf, cz.czName);
+        const sync = await syncCz(refXz, 'ref.xz', cz, null);
         if (sync.ok && sync.output) {
           const saved = await saveMachine(sub, sync.output, ea.fileName, source, rel.kind, rel.group || null);
           if (sub.anilist_id && via === 'indexer') setBdPref(sub.anilist_id, rel.at_id);
@@ -846,6 +878,7 @@ export async function bdResync(sub, source = 'hiyori', opts = {}) {
             ok: true, via, kind: rel.kind, release: ea.fileName, group: rel.group, seeders: rel.seeders,
             episode: sub.episode, format: sync.format, elapsed_ms: sync.elapsed_ms,
             machine_sub_id: saved.machineId, file_bytes: saved.bytes, tried, ref_source: 'tosho',
+            notes: sync.notes || [], warnings: sync.warnings || [],
           };
         }
         if (sync.bad_input === 'subtitle') return czBroken(sync);
