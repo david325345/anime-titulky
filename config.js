@@ -142,6 +142,14 @@ export const CONFIG = {
     url: (process.env.SUBSYNC_URL || 'http://subsync').replace(/\/+$/, ''),
   },
 
+  // audiosync — interní služba (LAPSE + Silero VAD): srovná KRÁTKÉ nejednoznačné části
+  // (úvod před openingem…) podle zvuku. Čte jen ~1 min zvuku ze stejného TorBox souboru.
+  // Vypnout: AUDIO_SYNC=0. Když služba neběží, přečas jen nechá varování jako dřív.
+  audiosync: {
+    enabled: !/^(0|false|no|off)$/i.test(process.env.AUDIO_SYNC || ''),
+    url: (process.env.AUDIOSYNC_URL || 'http://audiosync').replace(/\/+$/, ''),
+  },
+
   // Anime Tosho — zdroj EN referenčních titulků (extrahované z BD releasů).
   // USPÁNO: výchozí stav vypnuto (Tosho končí), kód zůstává. Zapnout TOSHO_ENABLED=1.
   tosho: {
