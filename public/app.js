@@ -526,6 +526,8 @@ function bdReport(r) {
       (odkud ? `Převzato z: ${odkud}\n` : '') +
       (zdroj ? `Release: ${zdroj}\n` : '') +
       `Díl ${r.episode ?? '—'} · formát ${r.format} · ${r.elapsed_ms} ms` +
+      ((r.notes && r.notes.length) ? '\n\nℹ ' + r.notes.join('\nℹ ') : '') +
+      ((r.warnings && r.warnings.length) ? '\n\n⚠ ZKONTROLUJ:\n⚠ ' + r.warnings.join('\n⚠ ') : '') +
       (r.via === 'manual-pick' ? '\n\n📌 Rip je uložený jako volba pro celé anime — další díly se přečasují podle něj.' : '') +
       (r.via === 'pin' ? '\n📌 Podle ručně zvoleného ripu.' : ''));
     return true;
@@ -571,6 +573,7 @@ async function runBulkBd(targetsUrl, source) {
 
   let ok = 0;
   const skipped = [];   // {ep, err}
+  const warned = [];    // {ep, warnings} — přečas prošel, ale něco ke kontrole
   for (let i = 0; i < targets.length; i++) {
     if (cancelled) break;
     const t = targets[i];
@@ -581,7 +584,7 @@ async function runBulkBd(targetsUrl, source) {
       const r = await (await fetch(`${base}/bd-resync`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
       })).json();
-      if (r && r.ok) ok++;
+      if (r && r.ok) { ok++; if (r.warnings && r.warnings.length) warned.push({ ep: t.episode ?? t.sub_id, w: r.warnings }); }
       else skipped.push({ ep: t.episode ?? t.sub_id, err: (r && r.error) || 'neznámá chyba' });
     } catch (e) { skipped.push({ ep: t.episode ?? t.sub_id, err: e.message }); }
     await new Promise((r) => setTimeout(r, 400)); // pauza mezi díly (Tosho/subsync)
@@ -598,6 +601,7 @@ async function runBulkBd(targetsUrl, source) {
     status.innerHTML =
       `${cancelled ? '⏹ Přerušeno' : '✔ Dokončeno'} — přečasováno ${ok} z ${targets.length}` +
       (skipped.length ? `, nepovedlo se ${skipped.length}:<br>` + lines.map(esc).join('<br>') : '') +
+      (warned.length ? `<br><br>⚠ Ke kontrole (${warned.length}):<br>` + warned.map((x) => esc(`• díl ${x.ep}: ${x.w.join('; ')}`)).join('<br>') : '') +
       (skipped.length && bulkPin ? '<br><br>U těchto dílů rozhodni v okně ⏱: zkusit automatiku jen pro díl, vybrat jiný rip, nahrát ručně, nebo zrušit volbu.' : '');
     overlay.querySelector('#bulk-close').textContent = 'Zavřít';
   }
