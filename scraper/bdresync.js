@@ -432,7 +432,7 @@ async function syncCz(refBuf, refName, cz, refIv) {
     const sync = await callSubsync(refBuf, refName, prep.sendBuf, cz.czName);
     if (sync.ok && sync.output) {
       const fin = finishCz(prep, String(sync.output), refIv);
-      if (fin) return { ...sync, output: fin.output, notes: fin.notes, warnings: fin.warnings, score: fin.score };
+      if (fin) return { ...sync, output: fin.output, notes: fin.notes, warnings: fin.warnings, score: fin.score, audioParts: fin.audioParts };
       console.warn('[bdresync] maskovaný výstup alassu nesedí počtem replik → přečas postaru');
     } else if (sync.bad_input !== 'subtitle') {
       return sync;                                   // chyba reference/služby → stejná by byla i postaru
@@ -565,7 +565,7 @@ async function resyncAndSave(sub, refBuf, refName, releaseTitle, source, kind = 
     ok: true, kind, release: releaseTitle, episode: sub.episode,
     format: sync.format, elapsed_ms: sync.elapsed_ms,
     machine_sub_id: saved.machineId, file_bytes: saved.bytes,
-    notes: sync.notes || [], warnings: sync.warnings || [], score: sync.score ?? null,
+    notes: sync.notes || [], warnings: sync.warnings || [], score: sync.score ?? null, audio_parts: sync.audioParts || [],
   };
 }
 
@@ -706,7 +706,7 @@ async function resyncOnRelease(sub, source, infohash, { forced, pin }) {
     seeders: rel.seeders, episode: sub.episode, format: sync.format, elapsed_ms: sync.elapsed_ms,
     machine_sub_id: saved.machineId, file_bytes: saved.bytes, tried: 1,
     ref_source: 'torbox', ref_track: p.pk.why, ref_kb: p.kb, pin_label: rel.name,
-    notes: sync.notes || [], warnings: sync.warnings || [], score: sync.score ?? null,
+    notes: sync.notes || [], warnings: sync.warnings || [], score: sync.score ?? null, audio_parts: sync.audioParts || [],
   };
 }
 
@@ -817,7 +817,7 @@ export async function bdResync(sub, source = 'hiyori', opts = {}) {
           episode: sub.episode, format: sync.format, elapsed_ms: sync.elapsed_ms,
           machine_sub_id: saved.machineId, file_bytes: saved.bytes, tried,
           ref_source: 'torbox', ref_track: p.pk.why, ref_kb: Math.round(p.tl.bytes / 1024), probed,
-          notes: sync.notes || [], warnings: sync.warnings || [], score: sync.score ?? null,
+          notes: sync.notes || [], warnings: sync.warnings || [], score: sync.score ?? null, audio_parts: sync.audioParts || [],
         } };
       }
       if (sync.bad_input === 'subtitle') return { done: czBroken(sync) };
@@ -886,7 +886,7 @@ export async function bdResync(sub, source = 'hiyori', opts = {}) {
             ok: true, via, kind: rel.kind, release: ea.fileName, group: rel.group, seeders: rel.seeders,
             episode: sub.episode, format: sync.format, elapsed_ms: sync.elapsed_ms,
             machine_sub_id: saved.machineId, file_bytes: saved.bytes, tried, ref_source: 'tosho',
-            notes: sync.notes || [], warnings: sync.warnings || [], score: sync.score ?? null,
+            notes: sync.notes || [], warnings: sync.warnings || [], score: sync.score ?? null, audio_parts: sync.audioParts || [],
           };
         }
         if (sync.bad_input === 'subtitle') return czBroken(sync);

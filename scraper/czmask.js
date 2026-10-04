@@ -38,6 +38,8 @@ const WARN_JUMP = 30000;      // úsek jinak než okolí o > 30 s → varování
 const SHORT_PART = 40;        // „krátká část" (úvod před openingem…) — ta se váže na blok reference
 const BLOCK_GAP = 30000;      // mezera ≥ 30 s bez titulků v referenci = hranice bloku (píseň)
 const BLOCK_TOL = 1000;       // část smí z bloku vyčnívat max. o 1 s
+const AMBIG_RATIO = 0.9;      // posuny se shodou ≥ 90 % maxima…
+const AMBIG_SPREAD = 500;     // …pokrývající víc než 0,5 s = titulky nerozhodnou
 const SCORE_WARN = Number(process.env.BD_SCORE_WARN) || 1.2;    // shoda < 1,2× náhodná → ⚠ (doladit podle reálných dílů)
 
 const ms = (h, m, s, f) => ((+h * 60 + +m) * 60 + +s) * 1000 + Math.round(+(`0.${f}`) * 1000);
@@ -272,19 +274,27 @@ function fitInBlock(part, bloky) {
   const base = [...part].sort((x, y) => x.s - y.s);
   const czDur = totalDur(part);
   let best = null;
+  const krivka = [];                                       // shoda pro každý posun (po 0,1 s)
   for (let off = Math.ceil(lo / 100) * 100; off <= hi; off += 100) {
     const v = iouWith(base.map((x) => [x.s + off, x.e + off]), blk, czDur);
+    krivka.push([off, v]);
     if (!best || v > best.v + 1e-9) best = { off, v, plato: [off] };
     else if (Math.abs(v - best.v) <= 1e-9) best.plato.push(off);
   }
   if (!best) return null;                                  // alass je mimo blok o víc než 30 s → nesahám
   const off = best.plato[best.plato.length >> 1];
+  // NEJEDNOZNAČNOST: posuny se shodou ≥ 90 % maxima — když pokrývají víc než 0,5 s,
+  // titulky samy nerozhodnou (LvB E7 úvod: plochá shoda −1,9 … +1,6 s)
+  const dobre = krivka.filter(([, v]) => v >= best.v * AMBIG_RATIO).map(([o]) => o);
+  const rozpeti = dobre.length ? [Math.min(...dobre), Math.max(...dobre)] : [off, off];
+  // kolik titulků reference v místě části je (BD tam může mlčet / mít jen cedulky)
+  const refN = blk.iv.filter((r) => r.e > first + off && r.s < lastEnd + off).length;
   const curPairs = ok.sort((x, y) => x.ns - y.ns).map((x) => [x.ns, x.ns + capDur(x.s, x.e)]);
   const curIou = iouWith(curPairs, blk, czDur);
   const inside = ok.length === part.length && ok.every((x) => x.ns >= blk.s - BLOCK_TOL && x.ns + capDur(x.s, x.e) <= blk.e + BLOCK_TOL);
   // změna, když alass část z bloku vystrčil (nebo ořízl), nebo když je v bloku výrazně líp
   const change = (!inside || best.v >= curIou + 0.1) && (was == null || Math.abs(off - was) > 300);
-  return { off, iou: best.v, curIou, was, blk, change };
+  return { off, iou: best.v, curIou, was, blk, change, inside, rozpeti, refN };
 }
 
 /**
@@ -304,7 +314,7 @@ export function finishCz(prep, outputText, refIv) {
   // nejbližší další repliky (LvB E7: 0:00,9 / 4,7 / 7,0 → 0:00, další repliky −9,3 s).
   markClamped(prep.kept, outEv.map((o) => o.s), outEv.map((o) => o.e));
 
-  const notes = [];
+  const notes = [], warnings = [];
   if (prep.excluded) {
     notes.push(`z porovnání vyřazeno ${prep.excluded} řádků písní/cedulek` +
       (prep.songs.length ? ` (písně ${prep.songs.map((c) => `${mmss(c.s)}–${mmss(c.e)}`).join(', ')})` : ''));
@@ -320,6 +330,9 @@ export function finishCz(prep, outputText, refIv) {
   //    CZ proto musí ležet CELÁ uvnitř jednoho bloku reference (mezi dlouhými mezerami).
   //    Samotná shoda (alass i překryv) je u ~8 replik proti husté referenci nejednoznačná
   //    (LvB E7 úvod: alass −9,3 s, překryv +8,4 s, správně ~−1 s).
+  //    Kde titulky nerozhodnou, část se zapíše do audioParts (kandidát na srovnání
+  //    podle zvuku) a do varování — zvuk zatím NEstahujeme, jen ukazujeme, kde by pomohl.
+  const audioParts = [];
   if (ref) {
     const bloky = blocksOf(ref);
     for (const part of parts) {
@@ -328,10 +341,24 @@ export function finishCz(prep, outputText, refIv) {
       const r = fitInBlock(part, bloky);
       if (!r) continue;
       if (r.skip) { notes.push(r.skip); continue; }
-      if (!r.change) continue;
-      for (const x of part) { x.ns = x.s + r.off; x.ne = x.e + r.off; }
-      notes.push(`část ${mmss(part[0].s)}–${mmss(part[n - 1].s)} (${n} replik): posun ${r.was != null ? `opraven z ${sec(r.was)} ` : ''}na ${sec(r.off)} ` +
-        `(musí ležet v bloku reference ${mmss(r.blk.s)}–${mmss(r.blk.e)}; shoda ${pct(r.curIou)} → ${pct(r.iou)})`);
+      const proc = [];
+      if (r.rozpeti[1] - r.rozpeti[0] > AMBIG_SPREAD) proc.push(`shoda je plochá ${sec(r.rozpeti[0])} … ${sec(r.rozpeti[1])}`);
+      if (!r.inside) proc.push('alass ji vystrčil z bloku reference');
+      if (r.refN < n / 2) proc.push(`reference tam má jen ${r.refN} titulků na ${n} replik`);
+      if (r.change) {
+        for (const x of part) { x.ns = x.s + r.off; x.ne = x.e + r.off; }
+        notes.push(`část ${mmss(part[0].s)}–${mmss(part[n - 1].s)} (${n} replik): posun ${r.was != null ? `opraven z ${sec(r.was)} ` : ''}na ${sec(r.off)} ` +
+          `(musí ležet v bloku reference ${mmss(r.blk.s)}–${mmss(r.blk.e)}; shoda ${pct(r.curIou)} → ${pct(r.iou)})`);
+      }
+      // jen „vystrčeno z bloku" po opravě už nevadí; nejednoznačnost a řídká reference ano
+      const vazne = proc.filter((t) => !/vystrčil/.test(t));
+      if (vazne.length) {
+        const od = Math.min(...part.map((x) => x.s)), doo = Math.max(...part.map((x) => x.e));
+        const pouzit = r.change || r.was == null ? r.off : r.was;          // posun, který opravdu platí
+        audioParts.push({ from: od, to: doo, n, off: pouzit, range: r.rozpeti, reasons: proc });
+        warnings.push(`krátká část ${mmss(od)}–${mmss(doo)} (${n} replik, posun ${sec(pouzit)}): ${proc.join('; ')} — ` +
+          `podle titulků nejde spolehlivě určit, zkontroluj (tady by pomohlo srovnání podle zvuku)`);
+      }
     }
   }
 
@@ -355,7 +382,7 @@ export function finishCz(prep, outputText, refIv) {
   }
 
   // c) pojistka + skóre jistoty
-  const warnings = warningsFor(prep.kept);
+  warnings.push(...warningsFor(prep.kept));
   let score = null;
   if (ref) {
     const sc = scoreOf(prep.kept, ref);
@@ -373,7 +400,7 @@ export function finishCz(prep, outputText, refIv) {
     const lead = (lines[x.li].match(/^\s*/) || [''])[0];
     lines[x.li] = `${lead}${x.kind}: ${f.join(',')}`;
   }
-  return { output: lines.join('\n'), notes, warnings, score };
+  return { output: lines.join('\n'), notes, warnings, score, audioParts };
 }
 
 /** Jen kontrola výsledku (SRT/postaru): porovná vstup a výstup replik po pořadí (+ skóre). */
