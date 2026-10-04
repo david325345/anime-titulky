@@ -223,6 +223,18 @@ function smoothDrift(part, ref) {
   return { from: q + k * ok[0].s, to: q + k * ok[n - 1].s };
 }
 
+// repliky, které alass ořízl na 0:00: posun k nule nesedí s posunem další repliky
+function markClamped(items, ns, ne) {
+  for (let i = 0; i < items.length; i++) {
+    const x = items[i];
+    x.ns = ns[i]; x.ne = ne[i];
+    if (ns[i] !== 0 || x.s <= 500) continue;
+    let d2 = null;
+    for (let j = i + 1; j < items.length; j++) if (ns[j] > 0) { d2 = ns[j] - items[j].s; break; }
+    if (d2 == null || Math.abs(-x.s - d2) > 500) { x.ns = -1; x.ne = -1; }
+  }
+}
+
 // bloky reference = sjednocené úseky rozdělené mezerami ≥ BLOCK_GAP (tam bývají písně)
 function blocksOf(ref) {
   const out = [];
@@ -287,12 +299,10 @@ export function finishCz(prep, outputText, refIv) {
   if (!out) return null;
   const outEv = out.events;
   if (outEv.length !== prep.kept.length) return null;
-  // alass ořezává záporné časy na 0:00 → takovou repliku označ jako „před začátkem" (−1)
-  // (ořez se pozná tak, že replika na 0:00 je kratší než originál — prostý posun délku nemění)
-  prep.kept.forEach((x, i) => {
-    const o = outEv[i], z = o.s === 0 && x.s > 500 && o.e - o.s < x.e - x.s - 50;
-    x.ns = z ? -1 : o.s; x.ne = z ? -1 : o.e;
-  });
+  // alass ořezává záporné časy na 0:00 (DÉLKU repliky přitom nechá!) → takovou repliku
+  // označ jako „před začátkem" (−1). Pozná se tak, že její posun nesedí s posunem
+  // nejbližší další repliky (LvB E7: 0:00,9 / 4,7 / 7,0 → 0:00, další repliky −9,3 s).
+  markClamped(prep.kept, outEv.map((o) => o.s), outEv.map((o) => o.e));
 
   const notes = [];
   if (prep.excluded) {
@@ -370,11 +380,9 @@ export function finishCz(prep, outputText, refIv) {
 export function checkOnly(czBuf, outputText, refIv = null) {
   const A = intervalsOf(decodeText(czBuf)), B = intervalsOf(String(outputText));
   if (!A.length || A.length !== B.length) return { warnings: [], notes: [], score: null };
-  // záporné časy alass ořízne na 0 → „posun" k nule u repliky, co původně nebyla na 0
-  const items = A.map((a, i) => {
-    const z = B[i].s === 0 && a.s > 500 && B[i].e - B[i].s < a.e - a.s - 50;
-    return { s: a.s, e: a.e, ns: z ? -1 : B[i].s, ne: z ? -1 : B[i].e };
-  });
+  // záporné časy alass ořízne na 0:00 → pozná se podle nesouladu s další replikou
+  const items = A.map((a) => ({ s: a.s, e: a.e }));
+  markClamped(items, B.map((b) => b.s), B.map((b) => b.e));
   const warnings = warningsFor(items), notes = [];
   let score = null;
   if (refIv && refIv.length >= 20) {
