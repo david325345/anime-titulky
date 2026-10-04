@@ -12,9 +12,11 @@
 //     karaoke… nebo \k tagy; ≥ 8 řádků za ≥ 40 s). Z kopie pro alass se vyřadí VŠE
 //     v těchto úsecích (i překlad textu) + ostatní ne-dialogové řádky (cedulky).
 //  2) finishCz — po alassu:
-//     a) každá část mezi písněmi (úvod, část A, část B…) se ověří proti referenci:
-//        když jeden konstantní posun trefí výrazně víc replik než výsledek alassu,
-//        použije se ten (E7: úvod −9,3 s → −0,9 s; alass ho přilepil k části A);
+//     a) KRÁTKÁ část mezi písněmi (do 40 replik, typicky úvod před openingem) se
+//        váže na BLOK reference: v dialogové stopě BD je v místě písně dlouhá mezera
+//        (≥ 30 s), takže část musí ležet celá v jednom bloku (±1 s). V těchto mezích
+//        se vybere nejlepší oboustranná shoda (IoU). Samotná shoda bez té vazby je
+//        u ~8 replik nejednoznačná (E7 úvod: alass −9,3 s, překryv +8,4 s, správně ~−1 s);
 //     b) vyřazené řádky převezmou posun PŘEDCHOZÍ dialogové repliky (opening jde
 //        s úvodem — skok −10 s za openingem je vystřižená TV cedulka sponzorů),
 //        a když před nimi žádná není, posun NÁSLEDUJÍCÍ;
@@ -33,6 +35,9 @@ const SONG_GAP = 6000;        // řádky písně od sebe max. 6 s
 const SONG_MIN_LINES = 8;
 const SONG_MIN_LEN = 40000;   // ≥ 40 s
 const WARN_JUMP = 30000;      // úsek jinak než okolí o > 30 s → varování
+const SHORT_PART = 40;        // „krátká část" (úvod před openingem…) — ta se váže na blok reference
+const BLOCK_GAP = 30000;      // mezera ≥ 30 s bez titulků v referenci = hranice bloku (píseň)
+const BLOCK_TOL = 1000;       // část smí z bloku vyčnívat max. o 1 s
 const SCORE_WARN = Number(process.env.BD_SCORE_WARN) || 1.2;    // shoda < 1,2× náhodná → ⚠ (doladit podle reálných dílů)
 
 const ms = (h, m, s, f) => ((+h * 60 + +m) * 60 + +s) * 1000 + Math.round(+(`0.${f}`) * 1000);
@@ -150,15 +155,6 @@ const totalDur = (items) => items.reduce((a, x) => a + capDur(x.s, x.e), 0) || 1
 // repliky „před začátkem videa" (ns < 0, alass je ořízl) se počítají jako nulová shoda
 const covNow = (items, ref) =>
   overlap(items.filter((x) => x.ns >= 0).sort((a, b) => a.ns - b.ns).map((x) => [x.ns, x.ns + capDur(x.s, x.e)]), ref) / totalDur(items);
-function bestConstant(items, ref) {
-  const base = [...items].sort((a, b) => a.s - b.s);
-  let best = { off: 0, cov: -1 };
-  for (let off = -150000; off <= 150000; off += 100) {
-    const c = overlap(base.map((x) => [x.s + off, x.e + off]), ref);
-    if (c > best.cov + 1 || (Math.abs(c - best.cov) <= 1 && Math.abs(off) < Math.abs(best.off))) best = { off, cov: c };
-  }
-  return { off: best.off, cov: best.cov / totalDur(items) };
-}
 const pct = (x) => `${Math.round(x * 100)} %`;
 // „náhodná" shoda = jak hustě reference pokrývá čas v rozsahu CZ replik; skutečná
 // shoda se s ní porovná (u cizí reference vyjde skoro stejně jako náhoda)
@@ -227,6 +223,58 @@ function smoothDrift(part, ref) {
   return { from: q + k * ok[0].s, to: q + k * ok[n - 1].s };
 }
 
+// bloky reference = sjednocené úseky rozdělené mezerami ≥ BLOCK_GAP (tam bývají písně)
+function blocksOf(ref) {
+  const out = [];
+  for (const r of ref) {
+    const l = out[out.length - 1];
+    if (l && r.s - l.e < BLOCK_GAP) { l.e = Math.max(l.e, r.e); l.iv.push(r); } else out.push({ s: r.s, e: r.e, iv: [r] });
+  }
+  for (const b of out) b.dur = b.iv.reduce((a, r) => a + (r.e - r.s), 0);
+  return out;
+}
+// oboustranná shoda (IoU) části s blokem: penalizuje i titulky bloku bez protějšku
+function iouWith(pairs, blk, czDur) {
+  const ov = overlap(pairs, blk.iv);
+  return ov / (czDur + blk.dur - ov || 1);
+}
+function fitInBlock(part, bloky) {
+  if (!bloky.length) return null;
+  const ok = part.filter((x) => x.ns >= 0);
+  const ds = ok.map((x) => x.ns - x.s).sort((a, b) => a - b);
+  const was = ds.length ? ds[ds.length >> 1] : null;
+  const first = Math.min(...part.map((x) => x.s));
+  const lastEnd = Math.max(...part.map((x) => x.s + capDur(x.s, x.e)));
+  // blok, kam část umístil alass (největší překryv rozsahu), jinak nejbližší
+  const a = first + (was ?? 0), b = lastEnd + (was ?? 0);
+  let blk = null, bestSc = -Infinity;
+  for (const k of bloky) {
+    const ov = Math.min(b, k.e) - Math.max(a, k.s);
+    const sc = ov > 0 ? ov : -Math.min(Math.abs(k.s - b), Math.abs(a - k.e));
+    if (sc > bestSc) { bestSc = sc; blk = k; }
+  }
+  let lo = blk.s - BLOCK_TOL - first, hi = blk.e + BLOCK_TOL - lastEnd;
+  // dlouhý blok (bez mezer) část skoro neomezí → hledej jen do ±30 s od posunu alassu
+  if (was != null) { lo = Math.max(lo, was - 30000); hi = Math.min(hi, was + 30000); }
+  if (lo > hi && blk.e - blk.s < lastEnd - first) return { skip: `část ${mmss(first)}–${mmss(lastEnd)} je delší než blok reference ${mmss(blk.s)}–${mmss(blk.e)} — ponechán posun alassu` };
+  const base = [...part].sort((x, y) => x.s - y.s);
+  const czDur = totalDur(part);
+  let best = null;
+  for (let off = Math.ceil(lo / 100) * 100; off <= hi; off += 100) {
+    const v = iouWith(base.map((x) => [x.s + off, x.e + off]), blk, czDur);
+    if (!best || v > best.v + 1e-9) best = { off, v, plato: [off] };
+    else if (Math.abs(v - best.v) <= 1e-9) best.plato.push(off);
+  }
+  if (!best) return null;                                  // alass je mimo blok o víc než 30 s → nesahám
+  const off = best.plato[best.plato.length >> 1];
+  const curPairs = ok.sort((x, y) => x.ns - y.ns).map((x) => [x.ns, x.ns + capDur(x.s, x.e)]);
+  const curIou = iouWith(curPairs, blk, czDur);
+  const inside = ok.length === part.length && ok.every((x) => x.ns >= blk.s - BLOCK_TOL && x.ns + capDur(x.s, x.e) <= blk.e + BLOCK_TOL);
+  // změna, když alass část z bloku vystrčil (nebo ořízl), nebo když je v bloku výrazně líp
+  const change = (!inside || best.v >= curIou + 0.1) && (was == null || Math.abs(off - was) > 300);
+  return { off, iou: best.v, curIou, was, blk, change };
+}
+
 /**
  * Dočistí výsledek alassu a složí celý CZ soubor.
  * @param prep výsledek prepareCz (mode 'ass')
@@ -240,7 +288,11 @@ export function finishCz(prep, outputText, refIv) {
   const outEv = out.events;
   if (outEv.length !== prep.kept.length) return null;
   // alass ořezává záporné časy na 0:00 → takovou repliku označ jako „před začátkem" (−1)
-  prep.kept.forEach((x, i) => { const z = outEv[i].s === 0 && x.s > 500; x.ns = z ? -1 : outEv[i].s; x.ne = z ? -1 : outEv[i].e; });
+  // (ořez se pozná tak, že replika na 0:00 je kratší než originál — prostý posun délku nemění)
+  prep.kept.forEach((x, i) => {
+    const o = outEv[i], z = o.s === 0 && x.s > 500 && o.e - o.s < x.e - x.s - 50;
+    x.ns = z ? -1 : o.s; x.ne = z ? -1 : o.e;
+  });
 
   const notes = [];
   if (prep.excluded) {
@@ -253,20 +305,23 @@ export function finishCz(prep, outputText, refIv) {
   const parts = [];
   for (let k = 0; k + 1 < hr.length; k++) parts.push(prep.kept.filter((x) => x.s >= hr[k] && x.s < hr[k + 1]));
 
-  // a) ověření částí mezi písněmi konstantním posunem proti referenci
+  // a) KRÁTKÉ části mezi písněmi (úvod před openingem, mezihra…) — vazba na BLOK reference.
+  //    V dialogové stopě BD je tam, kde je píseň, dlouhá mezera bez titulků. Krátká část
+  //    CZ proto musí ležet CELÁ uvnitř jednoho bloku reference (mezi dlouhými mezerami).
+  //    Samotná shoda (alass i překryv) je u ~8 replik proti husté referenci nejednoznačná
+  //    (LvB E7 úvod: alass −9,3 s, překryv +8,4 s, správně ~−1 s).
   if (ref) {
+    const bloky = blocksOf(ref);
     for (const part of parts) {
       const n = part.length;
-      if (n < 4) continue;
-      const cur = covNow(part, ref);
-      const best = bestConstant(part, ref);
-      if (best.cov >= 0.45 && best.cov >= cur + 0.15) {
-        const ds = part.filter((x) => x.ns >= 0).map((x) => x.ns - x.s).sort((a, b) => a - b);
-        const was = ds.length ? ds[ds.length >> 1] : null;
-        for (const x of part) { x.ns = x.s + best.off; x.ne = x.e + best.off; }
-        notes.push(`část ${mmss(part[0].s)}–${mmss(part[n - 1].s)} (${n} replik): posun ${was != null ? `opraven z ${sec(was)} ` : ''}na ${sec(best.off)} ` +
-          `(shoda s referencí ${pct(cur)} → ${pct(best.cov)})`);
-      }
+      if (n < 4 || n > SHORT_PART) continue;
+      const r = fitInBlock(part, bloky);
+      if (!r) continue;
+      if (r.skip) { notes.push(r.skip); continue; }
+      if (!r.change) continue;
+      for (const x of part) { x.ns = x.s + r.off; x.ne = x.e + r.off; }
+      notes.push(`část ${mmss(part[0].s)}–${mmss(part[n - 1].s)} (${n} replik): posun ${r.was != null ? `opraven z ${sec(r.was)} ` : ''}na ${sec(r.off)} ` +
+        `(musí ležet v bloku reference ${mmss(r.blk.s)}–${mmss(r.blk.e)}; shoda ${pct(r.curIou)} → ${pct(r.iou)})`);
     }
   }
 
@@ -317,7 +372,7 @@ export function checkOnly(czBuf, outputText, refIv = null) {
   if (!A.length || A.length !== B.length) return { warnings: [], notes: [], score: null };
   // záporné časy alass ořízne na 0 → „posun" k nule u repliky, co původně nebyla na 0
   const items = A.map((a, i) => {
-    const z = B[i].s === 0 && a.s > 500;
+    const z = B[i].s === 0 && a.s > 500 && B[i].e - B[i].s < a.e - a.s - 50;
     return { s: a.s, e: a.e, ns: z ? -1 : B[i].s, ne: z ? -1 : B[i].e };
   });
   const warnings = warningsFor(items), notes = [];
