@@ -461,6 +461,8 @@ async function syncCz(refBuf, refName, cz, refIv, media = null) {
 // ── audiosync (LAPSE podle zvuku) pro jednu krátkou část ───────────────────
 // Výsledek se použije JEN když leží v povoleném bloku reference (verdiktu LAPSE
 // samotnému nevěříme — na PGS dal „solid" i posunu o 9 minut).
+const AUDIO_MIN_CONF = 0.2;      // nižší jistota LAPSE = náhodná shoda (E7 měl 0,33)
+const AUDIO_MAX_DELTA = 5000;    // zvuk smí posun podle titulků opravit max. o ±5 s (E7: 1,9 s)
 async function audioForPart(prep, ap, url) {
   const job = audioJob(prep, ap);
   const kde = `úvod/část ${mmss(ap.from)}–${mmss(ap.to)}`;
@@ -481,6 +483,13 @@ async function audioForPart(prep, ap, url) {
     return { note: `${kde}: zvuk posun nepotvrdil (LAPSE: ${j.verdict}) — ponechán posun podle titulků` };
   }
   const off = Math.round(ap.off + j.offset_ms);
+  // pojistky (Rosario to Vampire E1: zvuk −51,6 s, jistota 0,13 u upoutávky, kterou BD nemá)
+  if (Number(j.confidence || 0) < AUDIO_MIN_CONF) {
+    return { note: `${kde}: zvuk dal ${fmt(off)}, ale s nízkou jistotou ${Number(j.confidence || 0).toFixed(2)} — nepoužito` };
+  }
+  if (Math.abs(j.offset_ms) > AUDIO_MAX_DELTA) {
+    return { note: `${kde}: zvuk dal ${fmt(off)}, to je o ${fmt(j.offset_ms)} jinak než podle titulků (víc než ±5 s) — nepoužito` };
+  }
   if (ap.lo != null && (off < ap.lo - 200 || off > ap.hi + 200)) {
     return { note: `${kde}: zvuk dal ${fmt(off)}, to je mimo blok reference (${fmt(ap.lo)} … ${fmt(ap.hi)}) — nepoužito` };
   }

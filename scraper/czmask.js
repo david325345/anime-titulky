@@ -38,6 +38,7 @@ const WARN_JUMP = 30000;      // úsek jinak než okolí o > 30 s → varování
 const SHORT_PART = 40;        // „krátká část" (úvod před openingem…) — ta se váže na blok reference
 const BLOCK_GAP = 30000;      // mezera ≥ 30 s bez titulků v referenci = hranice bloku (píseň)
 const BLOCK_TOL = 1000;       // část smí z bloku vyčnívat max. o 1 s
+const NEIGHBOR_MAX = 20000;   // krátká část se od posunu okolí smí lišit max. o 20 s (TV cedulka sponzorů ~10 s)
 const AMBIG_RATIO = 0.9;      // posuny se shodou ≥ 90 % maxima…
 const AMBIG_SPREAD = 1000;    // …pokrývající víc než 1 s = titulky nerozhodnou (0,5 s hlásilo i LvB E3 ±0,3 s)
 const SCORE_WARN = Number(process.env.BD_SCORE_WARN) || 1.2;    // shoda < 1,2× náhodná → ⚠ (doladit podle reálných dílů)
@@ -252,15 +253,20 @@ function iouWith(pairs, blk, czDur) {
   const ov = overlap(pairs, blk.iv);
   return ov / (czDur + blk.dur - ov || 1);
 }
-function fitInBlock(part, bloky) {
+// nb = posun nejbližší DLOUHÉ části (okolí). Krátká část se od něj nesmí odtrhnout
+// o víc než NEIGHBOR_MAX (Rosario to Vampire E1: upoutávka za endingem, kterou BD
+// nemá → blok daleko, rozsah −67 … −7 s, zvuk dal nesmysl −51,6 s při okolí 0 s).
+function fitInBlock(part, bloky, nb = null) {
   if (!bloky.length) return null;
   const ok = part.filter((x) => x.ns >= 0);
   const ds = ok.map((x) => x.ns - x.s).sort((a, b) => a - b);
   const was = ds.length ? ds[ds.length >> 1] : null;
   const first = Math.min(...part.map((x) => x.s));
   const lastEnd = Math.max(...part.map((x) => x.s + capDur(x.s, x.e)));
-  // blok, kam část umístil alass (největší překryv rozsahu), jinak nejbližší
-  const a = first + (was ?? 0), b = lastEnd + (was ?? 0);
+  // kotva: posun alassu, pokud se neodtrhl od okolí; jinak posun okolí
+  const anchor = was != null && (nb == null || Math.abs(was - nb) <= NEIGHBOR_MAX) ? was : (nb ?? was);
+  // blok, kam část umisťuje kotva (největší překryv rozsahu), jinak nejbližší
+  const a = first + (anchor ?? 0), b = lastEnd + (anchor ?? 0);
   let blk = null, bestSc = -Infinity;
   for (const k of bloky) {
     const ov = Math.min(b, k.e) - Math.max(a, k.s);
@@ -268,9 +274,11 @@ function fitInBlock(part, bloky) {
     if (sc > bestSc) { bestSc = sc; blk = k; }
   }
   let lo = blk.s - BLOCK_TOL - first, hi = blk.e + BLOCK_TOL - lastEnd;
-  // dlouhý blok (bez mezer) část skoro neomezí → hledej jen do ±30 s od posunu alassu
-  if (was != null) { lo = Math.max(lo, was - 30000); hi = Math.min(hi, was + 30000); }
+  // dlouhý blok (bez mezer) část skoro neomezí → hledej jen do ±30 s od kotvy
+  if (anchor != null) { lo = Math.max(lo, anchor - 30000); hi = Math.min(hi, anchor + 30000); }
+  if (nb != null) { lo = Math.max(lo, nb - NEIGHBOR_MAX); hi = Math.min(hi, nb + NEIGHBOR_MAX); }
   if (lo > hi && blk.e - blk.s < lastEnd - first) return { skip: `část ${mmss(first)}–${mmss(lastEnd)} je delší než blok reference ${mmss(blk.s)}–${mmss(blk.e)} — ponechán posun alassu` };
+  if (lo > hi) return { noFit: true, blk };                // blok reference je od okolí moc daleko
   const base = [...part].sort((x, y) => x.s - y.s);
   const czDur = totalDur(part);
   let best = null;
@@ -336,6 +344,15 @@ export function finishCz(prep, outputText, refIv, opts = {}) {
   const audioParts = [];
   if (ref) {
     const bloky = blocksOf(ref);
+    // posun okolí = medián posunu nejbližší dlouhé části
+    const medShift = (pt) => { const d = pt.filter((x) => x.ns >= 0).map((x) => x.ns - x.s).sort((a, b) => a - b); return d.length ? d[d.length >> 1] : null; };
+    const dlouhe = parts.filter((pt) => pt.length > SHORT_PART).map((pt) => ({ s: Math.min(...pt.map((x) => x.s)), e: Math.max(...pt.map((x) => x.e)), d: medShift(pt) })).filter((x) => x.d != null);
+    const okoli = (pt) => {
+      const a = Math.min(...pt.map((x) => x.s));
+      let best = null, dist = Infinity;
+      for (const L of dlouhe) { const dd = a < L.s ? L.s - a : a > L.e ? a - L.e : 0; if (dd < dist) { dist = dd; best = L.d; } }
+      return best;
+    };
     for (const part of parts) {
       const n = part.length;
       if (n < 4 || n > SHORT_PART) continue;
@@ -346,9 +363,18 @@ export function finishCz(prep, outputText, refIv, opts = {}) {
         notes.push(f.note);
         continue;
       }
-      const r = fitInBlock(part, bloky);
+      const nb = okoli(part);
+      const r = fitInBlock(part, bloky, nb);
       if (!r) continue;
       if (r.skip) { notes.push(r.skip); continue; }
+      if (r.noFit || r.refN === 0) {
+        // v BD tu nejspíš nic není (upoutávka / vystřižená scéna) → posun okolí, zvuk nezkoušet
+        const od = Math.min(...part.map((x) => x.s)), doo = Math.max(...part.map((x) => x.e));
+        if (nb != null) for (const x of part) { x.ns = x.s + nb; x.ne = x.e + nb; }
+        warnings.push(`krátká část ${mmss(od)}–${mmss(doo)} (${n} replik): reference BD tu nemá odpovídající titulky ` +
+          `(upoutávka nebo vystřižená scéna?) — ${nb != null ? `ponechán posun okolí ${sec(nb)}` : 'ponechán posun alassu'}, zkontroluj`);
+        continue;
+      }
       const proc = [];
       if (r.rozpeti[1] - r.rozpeti[0] > AMBIG_SPREAD) proc.push(`shoda je plochá ${sec(r.rozpeti[0])} … ${sec(r.rozpeti[1])}`);
       if (!r.inside) proc.push('alass ji vystrčil z bloku reference');
@@ -363,7 +389,7 @@ export function finishCz(prep, outputText, refIv, opts = {}) {
       if (vazne.length) {
         const od = Math.min(...part.map((x) => x.s)), doo = Math.max(...part.map((x) => x.e));
         const pouzit = r.change || r.was == null ? r.off : r.was;          // posun, který opravdu platí
-        audioParts.push({ from: od, to: doo, n, off: pouzit, range: r.rozpeti, lo: r.lo, hi: r.hi, reasons: proc });
+        audioParts.push({ from: od, to: doo, n, off: pouzit, nb, range: r.rozpeti, lo: r.lo, hi: r.hi, reasons: proc });
         warnings.push(`krátká část ${mmss(od)}–${mmss(doo)} (${n} replik, posun ${sec(pouzit)}): ${proc.join('; ')} — ` +
           `podle titulků nejde spolehlivě určit, zkontroluj (tady by pomohlo srovnání podle zvuku)`);
       }
