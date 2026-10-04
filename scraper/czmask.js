@@ -39,7 +39,7 @@ const SHORT_PART = 40;        // „krátká část" (úvod před openingem…) 
 const BLOCK_GAP = 30000;      // mezera ≥ 30 s bez titulků v referenci = hranice bloku (píseň)
 const BLOCK_TOL = 1000;       // část smí z bloku vyčnívat max. o 1 s
 const AMBIG_RATIO = 0.9;      // posuny se shodou ≥ 90 % maxima…
-const AMBIG_SPREAD = 500;     // …pokrývající víc než 0,5 s = titulky nerozhodnou
+const AMBIG_SPREAD = 1000;    // …pokrývající víc než 1 s = titulky nerozhodnou (0,5 s hlásilo i LvB E3 ±0,3 s)
 const SCORE_WARN = Number(process.env.BD_SCORE_WARN) || 1.2;    // shoda < 1,2× náhodná → ⚠ (doladit podle reálných dílů)
 
 const ms = (h, m, s, f) => ((+h * 60 + +m) * 60 + +s) * 1000 + Math.round(+(`0.${f}`) * 1000);
