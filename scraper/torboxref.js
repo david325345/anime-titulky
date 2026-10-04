@@ -365,17 +365,47 @@ const TIER_TXT = { 1: 'anglická ASS', 2: 'ASS jiného jazyka', 3: 'anglická SR
 /** @returns {{track:object, tier:number, why:string}|{track:null, reason:string}} */
 // PGS (bitmapové titulky) jako ZÁLOHA, když release nemá žádnou textovou
 // dialogovou stopu. Text nepotřebujeme — alass pracuje jen s časy a ty má PGS
-// v indexu Cues také. Události jsou střídavě „zobraz" a „smaž" → po dvojicích.
-// Ověřeno 21.9. (Isekai wa Smartphone E1): PGS z [kmplx] proti anglické ASS
-// ze stejného souboru → alass stejný posun −3,7 s, medián 40 ms, 100 % do 100 ms.
+// v indexu Cues také. Ověřeno 21.9. (Isekai wa Smartphone E1): PGS z [kmplx]
+// proti anglické ASS ze stejného souboru → alass stejný posun −3,7 s, medián 40 ms.
+//
+// PÁROVÁNÍ (opraveno 4.10., Ladies versus Butlers E1/E7): události v Cues jsou
+// „zobraz" a „smaž", ALE ne vždy střídavě — nový titulek může předchozí rovnou
+// nahradit bez smazání a na začátku bývá osamělá událost (0:00). Párování
+// natvrdo po dvojicích (1+2, 3+4…) se pak otočí a jako titulky se vezmou MEZERY
+// mezi replikami (E1: 507 událostí → jen 186 párů, reference od 2:06, alass
+// vyrobil nesmysl). Teď se každé události přiřadí stav zobraz/smaž dynamickým
+// programováním: zobrazený titulek trvá typicky 0,7–7 s, mezera bývá buď krátká
+// (< 0,6 s, navazující repliky), nebo dlouhá; dvě smazání za sebou skoro nikdy,
+// náhrada bez smazání občas. Dlouhé pauzy pořadí samy srovnají, takže se chyba
+// nepřenáší dál. Simulace (280 titulků, osamělá událost na začátku, 6 % náhrad):
+// staré párování 55 % správných začátků, nové 97 %.
 const BITMAP_CODEC = /PGS|HDMV/i;
-function pgsPairs(track, scale) {
-  const ev = track.cues.map((c) => c.t).sort((a, b) => a - b);
+const pgsSub = (x) => (x >= 700 && x <= 7000 ? 1 : x >= 300 && x <= 10000 ? 0.5 : x >= 300 && x <= 15000 ? 0 : -4);
+const pgsGap = (x) => (x < 600 || x > 7000 ? 1 : 0.6);
+const PGS_TR = [[-0.4, 0], [0, -2.5]];              // [z][do]: 0 = zobraz, 1 = smaž
+export function pgsPairs(track, scale) {
   const toMs = (u) => (u * scale) / 1e6;
+  const ev = [...new Set(track.cues.map((c) => c.t))].sort((a, b) => a - b);
+  const n = ev.length;
+  if (n < 2) return [];
+  const d = ev.slice(0, -1).map((t, i) => toMs(ev[i + 1] - t));
+  const dp = [[0, -0.5]];                            // na začátku spíš zobrazení
+  const from = [[0, 0]];
+  for (let i = 1; i < n; i++) {
+    dp.push([-Infinity, -Infinity]); from.push([0, 0]);
+    for (let s = 0; s < 2; s++) {
+      for (let p = 0; p < 2; p++) {
+        const v = dp[i - 1][p] + (p === 0 ? pgsSub(d[i - 1]) : pgsGap(d[i - 1])) + PGS_TR[p][s];
+        if (v > dp[i][s]) { dp[i][s] = v; from[i][s] = p; }
+      }
+    }
+  }
+  const st = new Array(n);
+  st[n - 1] = 1;                                     // poslední událost = smazání
+  for (let i = n - 1; i > 0; i--) st[i - 1] = from[i][st[i]];
   const out = [];
-  for (let i = 0; i + 1 < ev.length; i += 2) {
-    const len = toMs(ev[i + 1] - ev[i]);
-    if (len >= 300 && len <= 15000) out.push({ t: ev[i], d: ev[i + 1] - ev[i] });
+  for (let i = 0; i < n - 1; i++) {
+    if (st[i] === 0 && d[i] >= 300 && d[i] <= 15000) out.push({ t: ev[i], d: ev[i + 1] - ev[i] });
   }
   return out;
 }
@@ -399,7 +429,7 @@ export function pickDialogueTrack(tracks, scale = 1_000_000) {
       const x = pgs[0];
       return {
         track: { ...x.t, cues: x.pairs }, tier: 5, pgs: true,
-        why: `${TIER_TXT[5]}${x.t.name ? ` „${x.t.name}"` : ''} (${x.t.lang || '?'}, ${x.pairs.length} titulků)`,
+        why: `${TIER_TXT[5]}${x.t.name ? ` „${x.t.name}"` : ''} (${x.t.lang || '?'}, ${x.pairs.length} titulků z ${x.t.cues.length} událostí)`,
       };
     }
     if (!text.length) {
