@@ -202,7 +202,7 @@ function runsOf(items) {
   const u = [];
   for (const x of [...items].sort((a, b) => a.s - b.s)) {
     const d = x.ns - x.s, l = u[u.length - 1];
-    if (l && Math.abs(d - l.d) <= 250) { l.n++; l.do = x.s; } else u.push({ d, n: 1, od: x.s, do: x.s });
+    if (l && Math.abs(d - l.d) <= 250 && x.s - l.do <= 120000) { l.n++; l.do = x.s; } else u.push({ d, n: 1, od: x.s, do: x.s });
   }
   return u;
 }
@@ -445,22 +445,39 @@ export function finishCz(prep, outputText, refIv, opts = {}) {
       return best;
     };
     // jedna krátká část (nebo utržený kus dlouhé části); nb = posun okolí
-    const doShort = (part, nb, co = 'krátká část') => {
+    const doShort = (all, nb, co = 'krátká část') => {
+      // osamělé řádky daleko za koncem (> 2 min, např. řádek s časem 1:00:00 na konci CZ
+      // titulků — Rosario E10) se do měření nepočítají (část by se tvářila na 36 min a nevešla
+      // by se do žádného bloku); posun ale dostanou stejný jako zbytek části
+      const srt = [...all].sort((p, q) => p.s - q.s);
+      let k = srt.length;
+      while (k > 1 && srt[k - 1].s - srt[k - 2].e > 120000) k--;
+      const part = srt.slice(0, k);
       const n = part.length;
       const od0 = Math.min(...part.map((x) => x.s));
       const f = forced.find((q) => Math.abs(q.from - od0) < 1);
       if (f) {                                   // posun určený podle zvuku (2. průchod)
-        for (const x of part) { x.ns = x.s + f.off; x.ne = x.e + f.off; }
+        for (const x of all) { x.ns = x.s + f.off; x.ne = x.e + f.off; }
         notes.push(f.note);
         return;
       }
       const r = fitInBlock(part, bloky, nb, refStarts);
-      if (!r) return;
-      if (r.skip) { notes.push(r.skip); return; }
+      if (!r || r.skip) {
+        // reference část neumí umístit. Když ji alass utrhl od okolí o > 20 s, je jeho posun
+        // nesmysl → posun okolí (dřív zůstal: Rosario E10/E11 konec −71,6 s při okolí 0 s)
+        const ds = part.filter((x) => x.ns >= 0).map((x) => x.ns - x.s), was = median(ds);
+        if (nb != null && was != null && Math.abs(was - nb) > NEIGHBOR_MAX) {
+          const od = part[0].s, doo = Math.max(...part.map((x) => x.e));
+          for (const x of all) { x.ns = x.s + nb; x.ne = x.e + nb; }
+          warnings.push(`${co} ${mmss(od)}–${mmss(doo)} (${n} replik): alass ji utrhl od okolí (${sec(was)}), reference ji neumí ` +
+            `umístit — dán posun okolí ${sec(nb)}, zkontroluj`);
+        } else if (r && r.skip) notes.push(r.skip);
+        return;
+      }
       if (r.noFit || r.refN === 0) {
         // v BD tu nejspíš nic není (upoutávka / vystřižená scéna) → posun okolí, zvuk nezkoušet
         const od = Math.min(...part.map((x) => x.s)), doo = Math.max(...part.map((x) => x.e));
-        if (nb != null) for (const x of part) { x.ns = x.s + nb; x.ne = x.e + nb; }
+        if (nb != null) for (const x of all) { x.ns = x.s + nb; x.ne = x.e + nb; }
         warnings.push(`${co} ${mmss(od)}–${mmss(doo)} (${n} replik): reference BD tu nemá odpovídající titulky ` +
           `(upoutávka nebo vystřižená scéna?) — ${nb != null ? `ponechán posun okolí ${sec(nb)}` : 'ponechán posun alassu'}, zkontroluj`);
         return;
@@ -470,7 +487,7 @@ export function finishCz(prep, outputText, refIv, opts = {}) {
       if (!r.inside) proc.push('alass ji vystrčil z bloku reference');
       if (r.refN < n / 2) proc.push(`reference tam má jen ${r.refN} titulků na ${n} replik`);
       if (r.change) {
-        for (const x of part) { x.ns = x.s + r.off; x.ne = x.e + r.off; }
+        for (const x of all) { x.ns = x.s + r.off; x.ne = x.e + r.off; }
         notes.push(`část ${mmss(part[0].s)}–${mmss(part[n - 1].s)} (${n} replik): posun ${r.was != null ? `opraven z ${sec(r.was)} ` : ''}na ${sec(r.off)} ` +
           (r.starts ? `(začátky ${r.starts.hit} z ${r.starts.n} replik sedí na titulky reference do 0,3 s)`
             : `(musí ležet v bloku reference ${mmss(r.blk.s)}–${mmss(r.blk.e)}; shoda ${pct(r.curIou)} → ${pct(r.iou)})`));
