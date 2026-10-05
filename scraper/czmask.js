@@ -56,7 +56,9 @@ const FINE_LINES = 30;        // úsek musí mít aspoň 30 replik
 const FINE_SHARE = 0.3;       // s posunem musí sedět aspoň 30 % replik (náhodně ~7 %)
 const FINE_GAIN = 1.25;       // …a o 25 % (a aspoň o 5) víc než bez něj
 // kontrola celé epizody zvukem na několika místech (jen u dílů „ke kontrole")
-const SPOT_N = 3, SPOT_LEN = 40000, SPOT_MIN_LINES = 8, SPOT_PAD = 5000;
+// místo ~80 s dialogu (+5 s okraje): na ~40 s dávalo LAPSE půlku nesmyslů „solid" (Rosario E10/E11),
+// úvody ~90–100 s vycházely správně
+const SPOT_N = 3, SPOT_LEN = 80000, SPOT_MIN_LINES = 12, SPOT_PAD = 5000;
 const SPOT_SKIP_HEAD = 180000, SPOT_SKIP_TAIL = 180000;   // první a poslední 3 min (opening, ending, upoutávka)
 
 const ms = (h, m, s, f) => ((+h * 60 + +m) * 60 + +s) * 1000 + Math.round(+(`0.${f}`) * 1000);
@@ -442,27 +444,26 @@ export function finishCz(prep, outputText, refIv, opts = {}) {
       for (const L of dlouhe) { const dd = a < L.s ? L.s - a : a > L.e ? a - L.e : 0; if (dd < dist) { dist = dd; best = L.d; } }
       return best;
     };
-    for (const part of parts) {
+    // jedna krátká část (nebo utržený kus dlouhé části); nb = posun okolí
+    const doShort = (part, nb, co = 'krátká část') => {
       const n = part.length;
-      if (n < 4 || n > SHORT_PART) continue;
       const od0 = Math.min(...part.map((x) => x.s));
       const f = forced.find((q) => Math.abs(q.from - od0) < 1);
       if (f) {                                   // posun určený podle zvuku (2. průchod)
         for (const x of part) { x.ns = x.s + f.off; x.ne = x.e + f.off; }
         notes.push(f.note);
-        continue;
+        return;
       }
-      const nb = okoli(part);
       const r = fitInBlock(part, bloky, nb, refStarts);
-      if (!r) continue;
-      if (r.skip) { notes.push(r.skip); continue; }
+      if (!r) return;
+      if (r.skip) { notes.push(r.skip); return; }
       if (r.noFit || r.refN === 0) {
         // v BD tu nejspíš nic není (upoutávka / vystřižená scéna) → posun okolí, zvuk nezkoušet
         const od = Math.min(...part.map((x) => x.s)), doo = Math.max(...part.map((x) => x.e));
         if (nb != null) for (const x of part) { x.ns = x.s + nb; x.ne = x.e + nb; }
-        warnings.push(`krátká část ${mmss(od)}–${mmss(doo)} (${n} replik): reference BD tu nemá odpovídající titulky ` +
+        warnings.push(`${co} ${mmss(od)}–${mmss(doo)} (${n} replik): reference BD tu nemá odpovídající titulky ` +
           `(upoutávka nebo vystřižená scéna?) — ${nb != null ? `ponechán posun okolí ${sec(nb)}` : 'ponechán posun alassu'}, zkontroluj`);
-        continue;
+        return;
       }
       const proc = [];
       if (r.rozpeti[1] - r.rozpeti[0] > AMBIG_SPREAD) proc.push(`shoda je plochá ${sec(r.rozpeti[0])} … ${sec(r.rozpeti[1])}`);
@@ -480,8 +481,34 @@ export function finishCz(prep, outputText, refIv, opts = {}) {
         const od = Math.min(...part.map((x) => x.s)), doo = Math.max(...part.map((x) => x.e));
         const pouzit = r.change || r.was == null ? r.off : r.was;          // posun, který opravdu platí
         audioParts.push({ from: od, to: doo, n, off: pouzit, nb, range: r.rozpeti, lo: r.lo, hi: r.hi, reasons: proc });
-        warnings.push(`krátká část ${mmss(od)}–${mmss(doo)} (${n} replik, posun ${sec(pouzit)}): ${proc.join('; ')} — ` +
+        warnings.push(`${co} ${mmss(od)}–${mmss(doo)} (${n} replik, posun ${sec(pouzit)}): ${proc.join('; ')} — ` +
           `podle titulků nejde spolehlivě určit, zkontroluj (tady by pomohlo srovnání podle zvuku)`);
+      }
+    };
+    for (const part of parts) {
+      if (part.length < 4 || part.length > SHORT_PART) continue;
+      doShort(part, okoli(part));
+    }
+
+    // a1) malé kusy DLOUHÉ části, které alass utrhl od okolí o > 30 s (Rosario E10/E11: 7 replik
+    //     upoutávky za endingem −71,6 s při okolí 0 s — ending nebyl poznaný jako píseň, takže to
+    //     nebyla samostatná krátká část). Zpracují se stejně jako krátká část: vazba na okolí
+    //     (±20 s), blok reference, případně zvuk. Kus se dělí i dlouhou mezerou (> 2 min —
+    //     řádek s časem 1:00:00 na konci CZ titulků do kusu nepatří).
+    for (const part of parts) {
+      if (part.length <= SHORT_PART) continue;
+      const runs = [];
+      for (const x of part.filter((y) => y.ns >= 0).sort((p, q) => p.s - q.s)) {
+        const d = x.ns - x.s, l = runs[runs.length - 1];
+        if (l && Math.abs(d - l.d) <= 250 && x.s - l.last <= 120000) { l.xs.push(x); l.last = x.s; }
+        else runs.push({ d, xs: [x], last: x.s });
+      }
+      const big = runs.filter((r) => r.xs.length >= 15);
+      if (!big.length) continue;
+      for (const r of runs) {
+        if (r.xs.length < 3 || r.xs.length >= 15) continue;
+        const near = big.reduce((p, q) => (Math.abs(q.xs[0].s - r.xs[0].s) < Math.abs(p.xs[0].s - r.xs[0].s) ? q : p));
+        if (Math.abs(r.d - near.d) > WARN_JUMP) doShort(r.xs, near.d, 'utržený kus');
       }
     }
   }
@@ -585,12 +612,16 @@ export function audioJob(prep, ap) {
 // Celá epizoda naráz zvukem nejde (LAPSE na LvB E7: „nothing") a stahovat ji celou
 // je zbytečné. Jako Nuvio AutoSync: vyberou se SPOT_N míst s hustým dialogem
 // rozprostřená po epizodě (bez prvních/posledních 3 min a bez písní), z každého
-// se přečte jen ~50 s zvuku a LAPSE řekne, o kolik HOTOVÉ titulky na tom místě
+// se přečte jen ~90 s zvuku a LAPSE řekne, o kolik HOTOVÉ titulky na tom místě
 // nesedí (0 = sedí). Vrací úlohy pro audiosync s časy už po přečasu.
+// (místo ~80 s dialogu → ~90 s zvuku, ~60 MB z TorBoxu)
 function pickSpots(lines, avoid) {
   const L = lines.filter((x) => x.t1 - x.t0 >= 300 && x.t1 - x.t0 <= 8000).sort((a, b) => a.t0 - b.t0);
   if (L.length < SPOT_MIN_LINES) return [];
-  const A = SPOT_SKIP_HEAD, B = Math.max(...L.map((x) => x.t1)) - SPOT_SKIP_TAIL;
+  // konec epizody = poslední souvislý dialog (osamělý řádek „1:00:00" na konci CZ titulků se nepočítá)
+  let k = L.length - 1;
+  while (k > 0 && L[k].t0 - L[k - 1].t1 > 120000) k--;
+  const A = SPOT_SKIP_HEAD, B = L[k].t1 - SPOT_SKIP_TAIL;
   if (B - A < SPOT_LEN * 2) return [];
   const cands = [];
   let j = 0;

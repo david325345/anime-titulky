@@ -485,6 +485,11 @@ async function syncCz(refBuf, refName, cz, refIv, media = null) {
 // samotnému nevěříme — na PGS dal „solid" i posunu o 9 minut).
 const AUDIO_MIN_CONF = 0.2;      // nižší jistota LAPSE = náhodná shoda (E7 měl 0,33)
 const AUDIO_MAX_DELTA = 5000;    // zvuk smí posun podle titulků opravit max. o ±5 s (E7: 1,9 s)
+// …ALE když zvuk vyjde na posun OKOLÍ (dlouhé části kolem), shodují se dva nezávislé zdroje →
+// platí i mimo blok a přes 5 s (Rosario E3/E4: úvod podle titulků +2,9 / +11,4 s, zvuk −2,94 /
+// −11,37 s → −0,04 / +0,03 s = přesně okolí; obojí pojistky zahodily). Nesmysl jako Rosario E1
+// (−51,6 s při okolí 0 s, jistota 0,13) tudy neprojde.
+const AUDIO_NB_AGREE = 500, AUDIO_NB_MIN_CONF = 0.1;
 const fmt = (v) => `${v >= 0 ? '+' : '−'}${Math.abs(v / 1000).toFixed(1).replace('.', ',')} s`;
 // jedna úloha pro audiosync → { j } nebo { err }
 async function callAudiosync(media, job) {
@@ -513,8 +518,15 @@ async function audioForPart(prep, ap, media) {
     return { note: `${kde}: zvuk posun nepotvrdil (LAPSE: ${j.verdict}) — ponechán posun podle titulků` };
   }
   const off = Math.round(ap.off + j.offset_ms);
+  const conf = Number(j.confidence || 0);
+  const lapse = `LAPSE ${j.verdict}, jistota ${conf.toFixed(2)}${media.audio ? `; ${media.audio.why}` : ''}`;
+  if (ap.nb != null && Math.abs(off - ap.nb) <= AUDIO_NB_AGREE && conf >= AUDIO_NB_MIN_CONF) {
+    return { forced: { from: ap.from, off,
+      note: `${kde} (${ap.n} replik) srovnán PODLE ZVUKU: ${fmt(off)} — shoduje se s posunem okolí ${fmt(ap.nb)} ` +
+        `(podle titulků vycházelo ${fmt(ap.off)}, nejednoznačně ${fmt(ap.range[0])} … ${fmt(ap.range[1])}; ${lapse})` } };
+  }
   // pojistky (Rosario to Vampire E1: zvuk −51,6 s, jistota 0,13 u upoutávky, kterou BD nemá)
-  if (Number(j.confidence || 0) < AUDIO_MIN_CONF) {
+  if (conf < AUDIO_MIN_CONF) {
     return { note: `${kde}: zvuk dal ${fmt(off)}, ale s nízkou jistotou ${Number(j.confidence || 0).toFixed(2)} — nepoužito` };
   }
   if (Math.abs(j.offset_ms) > AUDIO_MAX_DELTA) {
@@ -524,14 +536,15 @@ async function audioForPart(prep, ap, media) {
     return { note: `${kde}: zvuk dal ${fmt(off)}, to je mimo blok reference (${fmt(ap.lo)} … ${fmt(ap.hi)}) — nepoužito` };
   }
   return { forced: { from: ap.from, off,
-    note: `${kde} (${ap.n} replik) srovnán PODLE ZVUKU: ${fmt(off)} (titulky nejednoznačné ${fmt(ap.range[0])} … ${fmt(ap.range[1])}; ` +
-      `LAPSE ${j.verdict}, jistota ${Number(j.confidence || 0).toFixed(2)}${media.audio ? `; ${media.audio.why}` : ''})` } };
+    note: `${kde} (${ap.n} replik) srovnán PODLE ZVUKU: ${fmt(off)} (titulky nejednoznačné ${fmt(ap.range[0])} … ${fmt(ap.range[1])}; ${lapse})` } };
 }
 
 // ── kontrola celé epizody zvukem na několika místech ──────────────────────────
-// Jen u dílů „ke kontrole". Každé místo ~50 s zvuku; LAPSE řekne, o kolik HOTOVÉ
+// Jen u dílů „ke kontrole". Každé místo ~90 s zvuku; LAPSE řekne, o kolik HOTOVÉ
 // titulky na místě nesedí (0 = sedí).
-//   ok    = aspoň 2 jistá místa a všechna jistá do ±0,3 s → ověřeno, ⚠ za nízkou shodu pryč
+//   ok    = aspoň 2 jistá místa do ±0,3 s a jsou to víc než půlka jistých (jedno ulétlé místo se
+//           zahodí — LAPSE dává na krátkém úseku občas nesmysl i se „solid")
+//           → ověřeno, ⚠ za nízkou shodu pryč
 //   shift = aspoň 2 jistá místa se shodnou (do 0,25 s) na posunu ≥ 0,5 s → posunout části,
 //           kde leží (část s jiným jistým výsledkem se neposouvá)
 //   jinak = nerozhodlo, ⚠ zůstává
@@ -553,10 +566,12 @@ async function spotCheck(jobs, media) {
   }
   const desc = list.map((r) => `${mmss(r.at)} ${r.off != null ? `${fmt(r.off)} (jistota ${r.conf.toFixed(2)})` : (r.error || r.verdict || '?')}`).join(', ');
   const sure = list.filter((r) => r.sure);
-  if (sure.length >= 2 && sure.every((r) => Math.abs(r.off) <= okTol)) {
+  const good = sure.filter((r) => Math.abs(r.off) <= okTol);
+  if (good.length >= 2 && good.length * 2 > sure.length) {
+    const ulet = sure.length - good.length ? `, ${sure.length - good.length} ulétlé místo nebráno` : '';
     return { verdict: 'ok', list, text: dub
-      ? `✓ zvukem zhruba ověřeno na ${sure.length} místech, do ±1 s (EN dabing, přesnost nejde) (${desc}${stopa})`
-      : `✓ ověřeno zvukem na ${sure.length} místech, titulky sedí (${desc}${stopa})` };
+      ? `✓ zvukem zhruba ověřeno na ${good.length} místech, do ±1 s (EN dabing, přesnost nejde${ulet}) (${desc}${stopa})`
+      : `✓ ověřeno zvukem na ${good.length} místech, titulky sedí${ulet} (${desc}${stopa})` };
   }
   if (dub) return { verdict: 'unclear', list, text: `kontrola zvukem (jen EN dabing, hrubě): ${desc}${stopa} — podle dabingu neposouvám` };
   // největší skupina jistých míst se stejným posunem
