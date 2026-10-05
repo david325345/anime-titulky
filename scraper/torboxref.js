@@ -204,7 +204,7 @@ export async function episodeLink(target, { assumeCached = false } = {}) {
 const ID = {
   EBML: 0x1A45DFA3, Segment: 0x18538067, SeekHead: 0x114D9B74, Seek: 0x4DBB, SeekID: 0x53AB, SeekPos: 0x53AC,
   Info: 0x1549A966, TimecodeScale: 0x2AD7B1, Tracks: 0x1654AE6B, TrackEntry: 0xAE, TrackNumber: 0xD7,
-  TrackType: 0x83, CodecID: 0x86, Language: 0x22B59C, LangBCP47: 0x22B59D, Name: 0x536E,
+  TrackType: 0x83, FlagDefault: 0x88, CodecID: 0x86, Language: 0x22B59C, LangBCP47: 0x22B59D, Name: 0x536E,
   Cues: 0x1C53BB6B, CuePoint: 0xBB, CueTime: 0xB3, CueTrackPositions: 0xB7, CueTrack: 0xF7,
   CueDuration: 0xB2, Cluster: 0x1F43B675,
 };
@@ -310,6 +310,7 @@ export async function readTimeline(url, { refresh = null } = {}) {
 
   const tr = await at(seek[ID.Tracks], 4 << 20);
   const subs = {};
+  const audio = [];        // zvukové stopy v pořadí souboru (idx = ffmpeg 0:a:idx)
   for (const te of kids(tr.buf, tr.s, tr.e)) {
     if (te.id !== ID.TrackEntry) continue;
     const t = {};
@@ -319,11 +320,13 @@ export async function readTimeline(url, { refresh = null } = {}) {
       if (f.id === ID.CodecID) t.codec = str(tr.buf, f.dataStart, f.dataEnd);
       if (f.id === ID.Language || f.id === ID.LangBCP47) t.lang = str(tr.buf, f.dataStart, f.dataEnd);
       if (f.id === ID.Name) t.name = str(tr.buf, f.dataStart, f.dataEnd);
+      if (f.id === ID.FlagDefault) t.def = uint(tr.buf, f.dataStart, f.dataEnd) === 1;
     }
+    if (t.type === 0x02) audio.push({ idx: audio.length, num: t.num, codec: t.codec || '', lang: t.lang || '', name: t.name || '', def: t.def !== false });
     if (t.type === 0x11) subs[t.num] = { num: t.num, codec: t.codec || '', lang: t.lang || '', name: t.name || '', cues: [] };
   }
 
-  if (seek[ID.Cues] == null) return { tracks: Object.values(subs), scale, bytes, noCues: true };
+  if (seek[ID.Cues] == null) return { tracks: Object.values(subs), audio, scale, bytes, noCues: true };
 
   const cu = await at(seek[ID.Cues], 32 << 20);
   for (const cp of kids(cu.buf, cu.s, cu.e)) {
@@ -343,7 +346,7 @@ export async function readTimeline(url, { refresh = null } = {}) {
     }
     for (const p of pos) if (subs[p.t] && time != null) subs[p.t].cues.push({ t: time, d: p.d });
   }
-  return { tracks: Object.values(subs), scale, bytes };
+  return { tracks: Object.values(subs), audio, scale, bytes };
 }
 
 // ── výběr dialogové stopy ───────────────────────────────────────────────────
@@ -456,6 +459,27 @@ export function pickDialogueTrack(tracks, scale = 1_000_000) {
     track: t, tier,
     why: `${TIER_TXT[tier]}${t.name ? ` „${t.name}"` : ''} (${t.lang || '?'}, ${t.cues.length} replik)`,
   };
+}
+
+// ── zvuková stopa pro audiosync ─────────────────────────────────────────────
+// CZ titulky jsou časované na JAPONSKÝ zvuk. Anglický dabing má repliky jinde
+// (mluví se na pohyb úst, věty navíc/míň) → na přesnost ~0,3 s nestačí.
+// Pořadí: stopa jpn/ja → „Japanese/JP" v názvu → jediná stopa / stopa bez jazyka
+// (fansub ripy jazyk někdy nevyplní; nejspíš japonština) → jinak dabing (jp:false
+// = zvuk jen pro HRUBÉ ověření, nikdy pro posun).
+const isJaAudio = (t) => /^(ja|jpn)\b/i.test(t.lang || '') || /japan|日本|\bjpn?\b/i.test(t.name || '');
+export function pickAudioTrack(audio) {
+  if (!audio || !audio.length) return { idx: 0, jp: null, why: 'zvuk: 1. stopa (seznam stop neznámý)' };
+  const desc = (t) => `stopa ${t.idx + 1}${t.lang ? `, ${t.lang}` : ''}${t.name ? ` „${t.name}"` : ''}`;
+  const ja = audio.find(isJaAudio);
+  if (ja) return { idx: ja.idx, jp: true, why: `zvuk: ${desc(ja)}` };
+  const unk = audio.filter((t) => !t.lang || /^und/i.test(t.lang));
+  if (unk.length) {
+    const t = unk.find((x) => x.def) || unk[0];
+    return { idx: t.idx, jp: null, why: `zvuk: ${desc(t)} (jazyk neuvedený, beru jako japonštinu)` };
+  }
+  const t = audio.find((x) => /^en/i.test(x.lang)) || audio.find((x) => x.def) || audio[0];
+  return { idx: t.idx, jp: false, why: `zvuk: ${desc(t)} — japonský zvuk ve videu není, jen dabing` };
 }
 
 // ── časy → referenční SRT (text je pro alass lhostejný) ─────────────────────

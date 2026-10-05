@@ -15,7 +15,7 @@ import zlib from 'node:zlib';
 import { CONFIG } from '../config.js';
 import { r2Enabled, r2Put, r2Get, r2PublicUrl, r2Delete } from '../r2.js';
 import { saveMachineSub, machineIdFor, getBdPref, setBdPref, getBdPin, setBdPin, getSub } from '../db.js';
-import { cachedHashes, episodeLink, readTimeline, pickDialogueTrack, timelineToSrt } from './torboxref.js';
+import { cachedHashes, episodeLink, readTimeline, pickDialogueTrack, pickAudioTrack, timelineToSrt } from './torboxref.js';
 import { prepareCz, finishCz, checkOnly, intervalsOf, decodeText, audioJob, spotJobs, spotJobsPlain, mmss } from './czmask.js';
 
 // ── Indexer (self-signed cert → jen na tenhle host vypneme verifikaci) ──────
@@ -438,7 +438,7 @@ async function syncCz(refBuf, refName, cz, refIv, media = null) {
         // krátké nejednoznačné části → zkus zvuk (audiosync) ze STEJNÉHO souboru
         if (fin.audioParts.length && canAudio) {
           for (const ap of fin.audioParts) {
-            const r = await audioForPart(prep, ap, media.url);
+            const r = await audioForPart(prep, ap, media);
             if (r.forced) forced.push(r.forced); else if (r.note) extra.push(r.note);
           }
           if (forced.length) fin = finishCz(prep, String(sync.output), refIv, { forced }) || fin;
@@ -446,7 +446,7 @@ async function syncCz(refBuf, refName, cz, refIv, media = null) {
         // díl „ke kontrole" (nízká shoda / skok) → ověř zvukem na několika místech
         let spots = null, extraWarn = [];
         if (fin.spotWorth && canAudio) {
-          spots = await spotCheck(spotJobs(prep), media.url);
+          spots = await spotCheck(spotJobs(prep), media);
           if (spots.verdict === 'ok') {
             fin.warnings = fin.warnings.filter((w) => w !== fin.scoreWarn);
             extra.push(spots.text);
@@ -470,7 +470,7 @@ async function syncCz(refBuf, refName, cz, refIv, media = null) {
     let spots = null;
     if (chk.spotWorth && canAudio) {
       // SRT/postaru: zvuk jen OVĚŘÍ (posun celého souboru bez znalosti písní by byl risk)
-      spots = await spotCheck(spotJobsPlain(sync.output), media.url);
+      spots = await spotCheck(spotJobsPlain(sync.output), media);
       if (spots.verdict === 'ok') { chk.warnings = chk.warnings.filter((w) => w !== chk.scoreWarn); chk.notes.push(spots.text); }
       else if (spots.verdict === 'shift') chk.warnings.push(`zvuk ukazuje posun ${fmt(spots.off)} na ${spots.n} místech (${spots.desc}) — u SRT neposouvám, zkontroluj`);
       else chk.notes.push(spots.text);
@@ -487,11 +487,11 @@ const AUDIO_MIN_CONF = 0.2;      // nižší jistota LAPSE = náhodná shoda (E7
 const AUDIO_MAX_DELTA = 5000;    // zvuk smí posun podle titulků opravit max. o ±5 s (E7: 1,9 s)
 const fmt = (v) => `${v >= 0 ? '+' : '−'}${Math.abs(v / 1000).toFixed(1).replace('.', ',')} s`;
 // jedna úloha pro audiosync → { j } nebo { err }
-async function callAudiosync(url, job) {
+async function callAudiosync(media, job) {
   try {
     const res = await fetch(`${CONFIG.audiosync.url}/audiosync`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url, start_ms: job.start_ms, dur_ms: job.dur_ms, srt: job.srt }), signal: AbortSignal.timeout(200000),
+      body: JSON.stringify({ url: media.url, audio_track: media.audio ? media.audio.idx : 0, start_ms: job.start_ms, dur_ms: job.dur_ms, srt: job.srt }), signal: AbortSignal.timeout(200000),
     });
     const j = await res.json().catch(() => null);
     return j ? { j } : { err: `neplatná odpověď (HTTP ${res.status})` };
@@ -499,11 +499,14 @@ async function callAudiosync(url, job) {
     return { err: `služba audiosync nedostupná (${e.message})` };
   }
 }
-async function audioForPart(prep, ap, url) {
+async function audioForPart(prep, ap, media) {
   const job = audioJob(prep, ap);
   const kde = `úvod/část ${mmss(ap.from)}–${mmss(ap.to)}`;
+  if (media.audio && media.audio.jp === false) {
+    return { note: `${kde}: ve videu není japonský zvuk (jen dabing, repliky jinde) — srovnání podle zvuku vynecháno` };
+  }
   if (!job) return { note: `${kde}: zvuk nezkoušen (část je moc dlouhá nebo má málo replik)` };
-  const { j, err } = await callAudiosync(url, job);
+  const { j, err } = await callAudiosync(media, job);
   if (err) return { note: `${kde}: ${err} — ponechán posun podle titulků` };
   if (!j || !j.ok) return { note: `${kde}: zvuk nevyšel (${(j && j.error) || 'neplatná odpověď'}) — ponechán posun podle titulků` };
   if (j.verdict === 'nothing' || typeof j.offset_ms !== 'number') {
@@ -522,7 +525,7 @@ async function audioForPart(prep, ap, url) {
   }
   return { forced: { from: ap.from, off,
     note: `${kde} (${ap.n} replik) srovnán PODLE ZVUKU: ${fmt(off)} (titulky nejednoznačné ${fmt(ap.range[0])} … ${fmt(ap.range[1])}; ` +
-      `LAPSE ${j.verdict}, jistota ${Number(j.confidence || 0).toFixed(2)}, ${j.clip_kb} kB zvuku)` } };
+      `LAPSE ${j.verdict}, jistota ${Number(j.confidence || 0).toFixed(2)}${media.audio ? `; ${media.audio.why}` : ''})` } };
 }
 
 // ── kontrola celé epizody zvukem na několika místech ──────────────────────────
@@ -533,11 +536,14 @@ async function audioForPart(prep, ap, url) {
 //           kde leží (část s jiným jistým výsledkem se neposouvá)
 //   jinak = nerozhodlo, ⚠ zůstává
 const SPOT_OK = 300, SPOT_AGREE = 250, SPOT_FIX = 500;
-async function spotCheck(jobs, url) {
+async function spotCheck(jobs, media) {
+  const dub = !!(media.audio && media.audio.jp === false);    // jen dabing → hrubé ověření, nikdy posun
+  const okTol = dub ? 1000 : SPOT_OK;
+  const stopa = media.audio ? `; ${media.audio.why}` : '';
   if (jobs.length < 2) return { verdict: 'none', list: [], text: 'kontrola zvukem: málo vhodných míst s dialogem — nezkoušeno' };
   const list = [];
   for (const job of jobs) {
-    const { j, err } = await callAudiosync(url, job);
+    const { j, err } = await callAudiosync(media, job);
     const conf = j ? Number(j.confidence || 0) : 0;
     const sure = !!(j && j.ok && j.verdict !== 'nothing' && typeof j.offset_ms === 'number' &&
       conf >= AUDIO_MIN_CONF && Math.abs(j.offset_ms) <= AUDIO_MAX_DELTA);
@@ -547,9 +553,12 @@ async function spotCheck(jobs, url) {
   }
   const desc = list.map((r) => `${mmss(r.at)} ${r.off != null ? `${fmt(r.off)} (jistota ${r.conf.toFixed(2)})` : (r.error || r.verdict || '?')}`).join(', ');
   const sure = list.filter((r) => r.sure);
-  if (sure.length >= 2 && sure.every((r) => Math.abs(r.off) <= SPOT_OK)) {
-    return { verdict: 'ok', list, text: `✓ ověřeno zvukem na ${sure.length} místech, titulky sedí (${desc})` };
+  if (sure.length >= 2 && sure.every((r) => Math.abs(r.off) <= okTol)) {
+    return { verdict: 'ok', list, text: dub
+      ? `✓ zvukem zhruba ověřeno na ${sure.length} místech, do ±1 s (EN dabing, přesnost nejde) (${desc}${stopa})`
+      : `✓ ověřeno zvukem na ${sure.length} místech, titulky sedí (${desc}${stopa})` };
   }
+  if (dub) return { verdict: 'unclear', list, text: `kontrola zvukem (jen EN dabing, hrubě): ${desc}${stopa} — podle dabingu neposouvám` };
   // největší skupina jistých míst se stejným posunem
   let best = [];
   for (const a of sure) {
@@ -563,10 +572,10 @@ async function spotCheck(jobs, url) {
     const parts = [...new Set(best.map((r) => r.part))].filter((p) => !jine.has(p));
     if (Math.abs(off) >= SPOT_FIX && parts.length) {
       return { verdict: 'shift', off, parts, list, desc, n: best.length,
-        text: `posunuto PODLE ZVUKU o ${fmt(off)} (shoda na ${best.length} místech: ${desc}) — reference k videu nejspíš přesně nepasuje, zkontroluj` };
+        text: `posunuto PODLE ZVUKU o ${fmt(off)} (shoda na ${best.length} místech: ${desc}${stopa}) — reference k videu nejspíš přesně nepasuje, zkontroluj` };
     }
   }
-  return { verdict: 'unclear', list, text: `kontrola zvukem nerozhodla (${desc})` };
+  return { verdict: 'unclear', list, text: `kontrola zvukem nerozhodla (${desc}${stopa})` };
 }
 
 // úseky replik reference z časové osy TorBoxu (Cues; bez délky → 2 s jako timelineToSrt)
@@ -757,7 +766,7 @@ async function probeRelease(sub, rel) {
       return { ok: false, reason: pk.reason, msg: REASON_TXT[pk.reason] || pk.reason, file: L.file, tracks };
     }
     memoSet(sub.anilist_id, rel.at_id, { tier: pk.tier });
-    return { ok: true, file: L.file, pk, tl, tracks, kb: Math.round(tl.bytes / 1024), media: { url: L.url } };
+    return { ok: true, file: L.file, pk, tl, tracks, kb: Math.round(tl.bytes / 1024), media: { url: L.url, audio: pickAudioTrack(tl.audio) } };
   } catch (e) { return { ok: false, reason: 'error', msg: e.message, file: L.file }; }
   finally { await L.cleanup?.(); }
 }
@@ -926,7 +935,7 @@ export async function bdResync(sub, source = 'hiyori', opts = {}) {
           return null;
         }
         memoSet(sub.anilist_id, rel.at_id, { tier: pk.tier });
-        return { rel, file: L.file, pk, tl, media: { url: L.url } };
+        return { rel, file: L.file, pk, tl, media: { url: L.url, audio: pickAudioTrack(tl.audio) } };
       } catch (e) { why.sourceError++; lastErr = e.message; return null; }
       finally { await L.cleanup(); }
     };
