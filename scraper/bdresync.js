@@ -16,7 +16,7 @@ import { CONFIG } from '../config.js';
 import { r2Enabled, r2Put, r2Get, r2PublicUrl, r2Delete } from '../r2.js';
 import { saveMachineSub, machineIdFor, getBdPref, setBdPref, getBdPin, setBdPin, getSub } from '../db.js';
 import { cachedHashes, episodeLink, readTimeline, pickDialogueTrack, timelineToSrt } from './torboxref.js';
-import { prepareCz, finishCz, checkOnly, intervalsOf, decodeText, audioJob, mmss } from './czmask.js';
+import { prepareCz, finishCz, checkOnly, intervalsOf, decodeText, audioJob, spotJobs, spotJobsPlain, mmss } from './czmask.js';
 
 // ── Indexer (self-signed cert → jen na tenhle host vypneme verifikaci) ──────
 const insecureAgent = new https.Agent({ rejectUnauthorized: false });
@@ -428,22 +428,36 @@ async function callSubsync(refBuf, refName, czBuf, czName) {
 // řádků, nesedí počet), přečasuje se postaru celý soubor a jen se zkontroluje.
 async function syncCz(refBuf, refName, cz, refIv, media = null) {
   const prep = prepareCz(cz.czBuf, cz.czName);
+  const canAudio = !!(media && media.url && CONFIG.audiosync.enabled);
   if (prep.mode === 'ass') {
     const sync = await callSubsync(refBuf, refName, prep.sendBuf, cz.czName);
     if (sync.ok && sync.output) {
       let fin = finishCz(prep, String(sync.output), refIv);
       if (fin) {
+        const forced = [], extra = [];
         // krátké nejednoznačné části → zkus zvuk (audiosync) ze STEJNÉHO souboru
-        if (fin.audioParts.length && media && media.url && CONFIG.audiosync.enabled) {
-          const forced = [], extra = [];
+        if (fin.audioParts.length && canAudio) {
           for (const ap of fin.audioParts) {
             const r = await audioForPart(prep, ap, media.url);
             if (r.forced) forced.push(r.forced); else if (r.note) extra.push(r.note);
           }
           if (forced.length) fin = finishCz(prep, String(sync.output), refIv, { forced }) || fin;
-          fin.notes.push(...extra);
         }
-        return { ...sync, output: fin.output, notes: fin.notes, warnings: fin.warnings, score: fin.score, audioParts: fin.audioParts };
+        // díl „ke kontrole" (nízká shoda / skok) → ověř zvukem na několika místech
+        let spots = null, extraWarn = [];
+        if (fin.spotWorth && canAudio) {
+          spots = await spotCheck(spotJobs(prep), media.url);
+          if (spots.verdict === 'ok') {
+            fin.warnings = fin.warnings.filter((w) => w !== fin.scoreWarn);
+            extra.push(spots.text);
+          } else if (spots.verdict === 'shift') {
+            const fin2 = finishCz(prep, String(sync.output), refIv, { forced, shiftParts: spots.parts.map((p) => ({ part: p, off: spots.off })) });
+            if (fin2) { fin = fin2; extraWarn.push(spots.text); } else extra.push(`${spots.text} — posun se nepodařilo použít`);
+          } else extra.push(spots.text);
+        }
+        fin.notes.push(...extra);
+        fin.warnings.push(...extraWarn);
+        return { ...sync, output: fin.output, notes: fin.notes, warnings: fin.warnings, score: fin.score, audioParts: fin.audioParts, audioSpots: spots && spots.list };
       }
       console.warn('[bdresync] maskovaný výstup alassu nesedí počtem replik → přečas postaru');
     } else if (sync.bad_input !== 'subtitle') {
@@ -453,7 +467,15 @@ async function syncCz(refBuf, refName, cz, refIv, media = null) {
   const sync = await callSubsync(refBuf, refName, cz.czBuf, cz.czName);
   if (sync.ok && sync.output) {
     const chk = checkOnly(cz.czBuf, sync.output, refIv);
-    return { ...sync, notes: chk.notes, warnings: chk.warnings, score: chk.score };
+    let spots = null;
+    if (chk.spotWorth && canAudio) {
+      // SRT/postaru: zvuk jen OVĚŘÍ (posun celého souboru bez znalosti písní by byl risk)
+      spots = await spotCheck(spotJobsPlain(sync.output), media.url);
+      if (spots.verdict === 'ok') { chk.warnings = chk.warnings.filter((w) => w !== chk.scoreWarn); chk.notes.push(spots.text); }
+      else if (spots.verdict === 'shift') chk.warnings.push(`zvuk ukazuje posun ${fmt(spots.off)} na ${spots.n} místech (${spots.desc}) — u SRT neposouvám, zkontroluj`);
+      else chk.notes.push(spots.text);
+    }
+    return { ...sync, notes: chk.notes, warnings: chk.warnings, score: chk.score, audioSpots: spots && spots.list };
   }
   return sync;
 }
@@ -463,21 +485,26 @@ async function syncCz(refBuf, refName, cz, refIv, media = null) {
 // samotnému nevěříme — na PGS dal „solid" i posunu o 9 minut).
 const AUDIO_MIN_CONF = 0.2;      // nižší jistota LAPSE = náhodná shoda (E7 měl 0,33)
 const AUDIO_MAX_DELTA = 5000;    // zvuk smí posun podle titulků opravit max. o ±5 s (E7: 1,9 s)
-async function audioForPart(prep, ap, url) {
-  const job = audioJob(prep, ap);
-  const kde = `úvod/část ${mmss(ap.from)}–${mmss(ap.to)}`;
-  const fmt = (v) => `${v >= 0 ? '+' : '−'}${Math.abs(v / 1000).toFixed(1).replace('.', ',')} s`;
-  if (!job) return { note: `${kde}: zvuk nezkoušen (část je moc dlouhá nebo má málo replik)` };
-  let j = null;
+const fmt = (v) => `${v >= 0 ? '+' : '−'}${Math.abs(v / 1000).toFixed(1).replace('.', ',')} s`;
+// jedna úloha pro audiosync → { j } nebo { err }
+async function callAudiosync(url, job) {
   try {
     const res = await fetch(`${CONFIG.audiosync.url}/audiosync`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url, ...job }), signal: AbortSignal.timeout(200000),
+      body: JSON.stringify({ url, start_ms: job.start_ms, dur_ms: job.dur_ms, srt: job.srt }), signal: AbortSignal.timeout(200000),
     });
-    j = await res.json().catch(() => null);
+    const j = await res.json().catch(() => null);
+    return j ? { j } : { err: `neplatná odpověď (HTTP ${res.status})` };
   } catch (e) {
-    return { note: `${kde}: služba audiosync nedostupná (${e.message}) — ponechán posun podle titulků` };
+    return { err: `služba audiosync nedostupná (${e.message})` };
   }
+}
+async function audioForPart(prep, ap, url) {
+  const job = audioJob(prep, ap);
+  const kde = `úvod/část ${mmss(ap.from)}–${mmss(ap.to)}`;
+  if (!job) return { note: `${kde}: zvuk nezkoušen (část je moc dlouhá nebo má málo replik)` };
+  const { j, err } = await callAudiosync(url, job);
+  if (err) return { note: `${kde}: ${err} — ponechán posun podle titulků` };
   if (!j || !j.ok) return { note: `${kde}: zvuk nevyšel (${(j && j.error) || 'neplatná odpověď'}) — ponechán posun podle titulků` };
   if (j.verdict === 'nothing' || typeof j.offset_ms !== 'number') {
     return { note: `${kde}: zvuk posun nepotvrdil (LAPSE: ${j.verdict}) — ponechán posun podle titulků` };
@@ -496,6 +523,50 @@ async function audioForPart(prep, ap, url) {
   return { forced: { from: ap.from, off,
     note: `${kde} (${ap.n} replik) srovnán PODLE ZVUKU: ${fmt(off)} (titulky nejednoznačné ${fmt(ap.range[0])} … ${fmt(ap.range[1])}; ` +
       `LAPSE ${j.verdict}, jistota ${Number(j.confidence || 0).toFixed(2)}, ${j.clip_kb} kB zvuku)` } };
+}
+
+// ── kontrola celé epizody zvukem na několika místech ──────────────────────────
+// Jen u dílů „ke kontrole". Každé místo ~50 s zvuku; LAPSE řekne, o kolik HOTOVÉ
+// titulky na místě nesedí (0 = sedí).
+//   ok    = aspoň 2 jistá místa a všechna jistá do ±0,3 s → ověřeno, ⚠ za nízkou shodu pryč
+//   shift = aspoň 2 jistá místa se shodnou (do 0,25 s) na posunu ≥ 0,5 s → posunout části,
+//           kde leží (část s jiným jistým výsledkem se neposouvá)
+//   jinak = nerozhodlo, ⚠ zůstává
+const SPOT_OK = 300, SPOT_AGREE = 250, SPOT_FIX = 500;
+async function spotCheck(jobs, url) {
+  if (jobs.length < 2) return { verdict: 'none', list: [], text: 'kontrola zvukem: málo vhodných míst s dialogem — nezkoušeno' };
+  const list = [];
+  for (const job of jobs) {
+    const { j, err } = await callAudiosync(url, job);
+    const conf = j ? Number(j.confidence || 0) : 0;
+    const sure = !!(j && j.ok && j.verdict !== 'nothing' && typeof j.offset_ms === 'number' &&
+      conf >= AUDIO_MIN_CONF && Math.abs(j.offset_ms) <= AUDIO_MAX_DELTA);
+    list.push({ at: job.at, part: job.part, cues: job.cues, sure, off: j && typeof j.offset_ms === 'number' ? Math.round(j.offset_ms) : null,
+      conf, verdict: j && j.verdict, error: err || (j && !j.ok ? j.error : null) });
+    if (j && j.ok === false && /strop/.test(j.error || '')) break;      // denní strop → dál nezkoušet
+  }
+  const desc = list.map((r) => `${mmss(r.at)} ${r.off != null ? `${fmt(r.off)} (jistota ${r.conf.toFixed(2)})` : (r.error || r.verdict || '?')}`).join(', ');
+  const sure = list.filter((r) => r.sure);
+  if (sure.length >= 2 && sure.every((r) => Math.abs(r.off) <= SPOT_OK)) {
+    return { verdict: 'ok', list, text: `✓ ověřeno zvukem na ${sure.length} místech, titulky sedí (${desc})` };
+  }
+  // největší skupina jistých míst se stejným posunem
+  let best = [];
+  for (const a of sure) {
+    const g = sure.filter((b) => b.off >= a.off && b.off - a.off <= SPOT_AGREE);
+    if (g.length > best.length) best = g;
+  }
+  if (best.length >= 2) {
+    const offs = best.map((r) => r.off).sort((x, y) => x - y);
+    const off = offs[offs.length >> 1];
+    const jine = new Set(sure.filter((r) => !best.includes(r)).map((r) => r.part));
+    const parts = [...new Set(best.map((r) => r.part))].filter((p) => !jine.has(p));
+    if (Math.abs(off) >= SPOT_FIX && parts.length) {
+      return { verdict: 'shift', off, parts, list, desc, n: best.length,
+        text: `posunuto PODLE ZVUKU o ${fmt(off)} (shoda na ${best.length} místech: ${desc}) — reference k videu nejspíš přesně nepasuje, zkontroluj` };
+    }
+  }
+  return { verdict: 'unclear', list, text: `kontrola zvukem nerozhodla (${desc})` };
 }
 
 // úseky replik reference z časové osy TorBoxu (Cues; bez délky → 2 s jako timelineToSrt)
@@ -618,7 +689,7 @@ async function resyncAndSave(sub, refBuf, refName, releaseTitle, source, kind = 
     ok: true, kind, release: releaseTitle, episode: sub.episode,
     format: sync.format, elapsed_ms: sync.elapsed_ms,
     machine_sub_id: saved.machineId, file_bytes: saved.bytes,
-    notes: sync.notes || [], warnings: sync.warnings || [], score: sync.score ?? null, audio_parts: sync.audioParts || [],
+    notes: sync.notes || [], warnings: sync.warnings || [], score: sync.score ?? null, audio_parts: sync.audioParts || [], audio_spots: sync.audioSpots || [],
   };
 }
 
@@ -759,7 +830,7 @@ async function resyncOnRelease(sub, source, infohash, { forced, pin }) {
     seeders: rel.seeders, episode: sub.episode, format: sync.format, elapsed_ms: sync.elapsed_ms,
     machine_sub_id: saved.machineId, file_bytes: saved.bytes, tried: 1,
     ref_source: 'torbox', ref_track: p.pk.why, ref_kb: p.kb, pin_label: rel.name,
-    notes: sync.notes || [], warnings: sync.warnings || [], score: sync.score ?? null, audio_parts: sync.audioParts || [],
+    notes: sync.notes || [], warnings: sync.warnings || [], score: sync.score ?? null, audio_parts: sync.audioParts || [], audio_spots: sync.audioSpots || [],
   };
 }
 
@@ -870,7 +941,7 @@ export async function bdResync(sub, source = 'hiyori', opts = {}) {
           episode: sub.episode, format: sync.format, elapsed_ms: sync.elapsed_ms,
           machine_sub_id: saved.machineId, file_bytes: saved.bytes, tried,
           ref_source: 'torbox', ref_track: p.pk.why, ref_kb: Math.round(p.tl.bytes / 1024), probed,
-          notes: sync.notes || [], warnings: sync.warnings || [], score: sync.score ?? null, audio_parts: sync.audioParts || [],
+          notes: sync.notes || [], warnings: sync.warnings || [], score: sync.score ?? null, audio_parts: sync.audioParts || [], audio_spots: sync.audioSpots || [],
         } };
       }
       if (sync.bad_input === 'subtitle') return { done: czBroken(sync) };
@@ -939,7 +1010,7 @@ export async function bdResync(sub, source = 'hiyori', opts = {}) {
             ok: true, via, kind: rel.kind, release: ea.fileName, group: rel.group, seeders: rel.seeders,
             episode: sub.episode, format: sync.format, elapsed_ms: sync.elapsed_ms,
             machine_sub_id: saved.machineId, file_bytes: saved.bytes, tried, ref_source: 'tosho',
-            notes: sync.notes || [], warnings: sync.warnings || [], score: sync.score ?? null, audio_parts: sync.audioParts || [],
+            notes: sync.notes || [], warnings: sync.warnings || [], score: sync.score ?? null, audio_parts: sync.audioParts || [], audio_spots: sync.audioSpots || [],
           };
         }
         if (sync.bad_input === 'subtitle') return czBroken(sync);

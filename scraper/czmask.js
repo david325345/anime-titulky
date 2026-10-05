@@ -24,6 +24,9 @@
 //        časovače), posun v části proloží přímkou (ne přes skutečné střihy);
 //     c) pojistka: úsek s posunem o desítky sekund jinak než okolí nebo do záporného
 //        času se vrátí jako varování (do hlášky), nezůstane potichu rozbitý;
+//     a3) jemné doladění: dlouhý úsek se posune o medián odchylek začátků replik od
+//        začátků titulků reference (do ±0,4 s), jen když tím jasně víc replik sedí do 0,1 s;
+//     a4) posun části podle zvuku z kontroly na více místech (spotJobs, 2. průchod);
 //     d) skóre: jak velkou část doby CZ replik pokrývají titulky reference, proti
 //        „náhodné" shodě (hustota reference). Pod 1,2× náhody → ⚠ (env BD_SCORE_WARN).
 //  Shoda se měří PŘEKRYVEM úseků, ne začátky — u husté reference trefí začátky
@@ -45,6 +48,16 @@ const START_STRONG = 0.6;     // …a jasně vede, když tak sedí ≥ 60 % repl
 const AMBIG_RATIO = 0.9;      // posuny se shodou ≥ 90 % maxima…
 const AMBIG_SPREAD = 1000;    // …pokrývající víc než 1 s = titulky nerozhodnou (0,5 s hlásilo i LvB E3 ±0,3 s)
 const SCORE_WARN = Number(process.env.BD_SCORE_WARN) || 1.2;    // shoda < 1,2× náhodná → ⚠ (doladit podle reálných dílů)
+// jemné doladění dlouhých částí na ZAČÁTKY replik reference (alass nechává zbytek ~0,1–0,3 s)
+const FINE_MAX = 400;         // hledá se posun do ±0,4 s
+const FINE_TOL = 100;         // začátek „sedí" do 0,1 s
+const FINE_MIN = 100;         // menší posun než 0,1 s neřeším
+const FINE_LINES = 30;        // úsek musí mít aspoň 30 replik
+const FINE_SHARE = 0.3;       // s posunem musí sedět aspoň 30 % replik (náhodně ~7 %)
+const FINE_GAIN = 1.25;       // …a o 25 % (a aspoň o 5) víc než bez něj
+// kontrola celé epizody zvukem na několika místech (jen u dílů „ke kontrole")
+const SPOT_N = 3, SPOT_LEN = 40000, SPOT_MIN_LINES = 8, SPOT_PAD = 5000;
+const SPOT_SKIP_HEAD = 180000, SPOT_SKIP_TAIL = 180000;   // první a poslední 3 min (opening, ending, upoutávka)
 
 const ms = (h, m, s, f) => ((+h * 60 + +m) * 60 + +s) * 1000 + Math.round(+(`0.${f}`) * 1000);
 const parseTime = (x) => { const t = String(x).trim().match(/(\d+):(\d+):(\d+)[.,](\d+)/); return t ? ms(t[1], t[2], t[3], t[4]) : null; };
@@ -52,6 +65,8 @@ const pad = (n, w = 2) => String(n).padStart(w, '0');
 const fmtAss = (t) => { const c = Math.round(Math.max(0, t) / 10); return `${Math.floor(c / 360000)}:${pad(Math.floor(c / 6000) % 60)}:${pad(Math.floor(c / 100) % 60)}.${pad(c % 100)}`; };
 export const mmss = (t) => `${t < 0 ? '−' : ''}${Math.floor(Math.abs(t) / 60000)}:${pad(Math.floor(Math.abs(t) / 1000) % 60)}`;
 const sec = (d) => `${d >= 0 ? '+' : '−'}${Math.abs(d / 1000).toFixed(1).replace('.', ',')} s`;
+const sec2 = (d) => `${d >= 0 ? '+' : '−'}${Math.abs(d / 1000).toFixed(2).replace('.', ',')} s`;
+const median = (a) => { const b = [...a].sort((x, y) => x - y); return b.length ? b[b.length >> 1] : null; };
 
 export function decodeText(buf) {
   if (typeof buf === 'string') return buf;
@@ -241,6 +256,50 @@ function markClamped(items, ns, ne) {
   }
 }
 
+// ── B) jemné doladění na začátky replik reference ───────────────────────────
+// alass rovná podle překryvu úseků; zbytek bývá desetiny sekundy (LvB E8 konec
+// ~0,3 s pozadu). Začátky replik CZ přeložených z podobného dělení sedí na začátky
+// titulků reference — když se při malém společném posunu (do ±0,4 s) trefí do 0,1 s
+// výrazně víc replik, úsek se posune o medián odchylek. Celý ÚSEK naráz, ne replika
+// po replice (překlad bývá dělený jinak). Nápad z Nuvio AutoSync (kotvení na
+// začátky + mediánová pojistka), kód vlastní.
+function nearestIn(sorted, v) {             // nejbližší hodnota v seřazeném poli
+  let lo = 0, hi = sorted.length - 1;
+  if (hi < 0) return null;
+  while (lo < hi) { const m = (lo + hi) >> 1; if (sorted[m] < v) lo = m + 1; else hi = m; }
+  const a = sorted[lo], b = lo > 0 ? sorted[lo - 1] : null;
+  return b != null && Math.abs(b - v) < Math.abs(a - v) ? b : a;
+}
+// úseky části se stejným (nebo plynule se měnícím) posunem — dělí se na skutečných střizích (> 0,4 s)
+function segmentsOf(part) {
+  const ok = part.filter((x) => x.ns >= 0).sort((a, b) => a.s - b.s);
+  const seg = [];
+  let cur = null, pd = null;
+  for (const x of ok) {
+    const d = x.ns - x.s;
+    if (!cur || Math.abs(d - pd) > 400) { cur = []; seg.push(cur); }
+    cur.push(x); pd = d;
+  }
+  return seg;
+}
+function fineStarts(seg, refStarts) {
+  const L = seg.filter((x) => x.e - x.s >= 250 && x.e - x.s <= 8000);
+  if (L.length < FINE_LINES) return null;
+  const st = L.map((x) => x.ns).sort((a, b) => a - b);
+  const hits = (o) => st.reduce((h, t) => { const r = nearestIn(refStarts, t + o); return h + (r != null && Math.abs(r - t - o) <= FINE_TOL ? 1 : 0); }, 0);
+  const h0 = hits(0);
+  let best = { o: 0, h: h0 };
+  for (let o = -FINE_MAX; o <= FINE_MAX; o += 20) {
+    const h = hits(o);
+    if (h > best.h || (h === best.h && Math.abs(o) < Math.abs(best.o))) best = { o, h };
+  }
+  // přesný posun = medián odchylek replik, které kolem nejlepšího posunu sedí
+  const dev = st.map((t) => nearestIn(refStarts, t) - t).filter((d) => Math.abs(d - best.o) <= FINE_TOL);
+  const off = Math.round(median(dev) ?? best.o);
+  const apply = Math.abs(off) >= FINE_MIN && best.h >= L.length * FINE_SHARE && best.h >= h0 * FINE_GAIN && best.h - h0 >= 5;
+  return { n: L.length, h0, h: best.h, off, apply, od: seg[0].s, do: seg[seg.length - 1].s };
+}
+
 // bloky reference = sjednocené úseky rozdělené mezerami ≥ BLOCK_GAP (tam bývají písně)
 function blocksOf(ref) {
   const out = [];
@@ -358,6 +417,8 @@ export function finishCz(prep, outputText, refIv, opts = {}) {
   }
 
   const ref = refIv && refIv.length >= 20 ? mergeIv(refIv) : null;
+  // začátky titulků reference bez titulků/karaoke (< 0,25 s nebo > 8 s)
+  const refStarts = (refIv || []).filter((x) => x.e - x.s >= 250 && x.e - x.s <= 8000).map((x) => x.s).sort((a, b) => a - b);
   const hr = [-Infinity, ...prep.songs.map((c) => c.s), Infinity];
   const parts = [];
   for (let k = 0; k + 1 < hr.length; k++) parts.push(prep.kept.filter((x) => x.s >= hr[k] && x.s < hr[k + 1]));
@@ -372,8 +433,6 @@ export function finishCz(prep, outputText, refIv, opts = {}) {
   const audioParts = [];
   if (ref) {
     const bloky = blocksOf(ref);
-    // začátky titulků reference bez titulků/karaoke (< 0,25 s nebo > 8 s)
-    const refStarts = (refIv || []).filter((x) => x.e - x.s >= 250 && x.e - x.s <= 8000).map((x) => x.s).sort((a, b) => a - b);
     // posun okolí = medián posunu nejbližší dlouhé části
     const medShift = (pt) => { const d = pt.filter((x) => x.ns >= 0).map((x) => x.ns - x.s).sort((a, b) => a - b); return d.length ? d[d.length >> 1] : null; };
     const dlouhe = parts.filter((pt) => pt.length > SHORT_PART).map((pt) => ({ s: Math.min(...pt.map((x) => x.s)), e: Math.max(...pt.map((x) => x.e)), d: medShift(pt) })).filter((x) => x.d != null);
@@ -433,6 +492,39 @@ export function finishCz(prep, outputText, refIv, opts = {}) {
   if (hladke.length) notes.push(`posun vyhlazen v ${hladke.length} ${hladke.length === 1 ? 'části' : 'částech'} ` +
     `(${hladke.map((r) => `${sec(r.from)} → ${sec(r.to)}`).join(', ')})`);
 
+  // a3) jemné doladění dlouhých částí na začátky replik reference
+  if (ref && refStarts.length >= FINE_LINES) {
+    const zpr = [];
+    for (const part of parts) {
+      if (part.length <= SHORT_PART) continue;
+      for (const seg of segmentsOf(part)) {
+        const r = fineStarts(seg, refStarts);
+        if (!r) continue;
+        const kde = `${mmss(r.od)}–${mmss(r.do)}`;
+        if (r.apply) {
+          const before = covNow(part, ref);
+          for (const x of seg) { x.ns += r.off; x.ne += r.off; }
+          if (covNow(part, ref) < before - 0.02) {          // překryv by se zhoršil → vrátit
+            for (const x of seg) { x.ns -= r.off; x.ne -= r.off; }
+            zpr.push(`${kde} nedoladěno (${sec2(r.off)} by zhoršilo překryv)`);
+            continue;
+          }
+          zpr.push(`${kde} doladěno o ${sec2(r.off)} (začátky do 0,1 s: ${r.h0} → ${r.h} z ${r.n})`);
+        } else {
+          zpr.push(`${kde} beze změny (sedí ${r.h0} z ${r.n} replik${Math.abs(r.off) >= FINE_MIN ? `, nejlepší posun ${sec2(r.off)} by dal ${r.h}` : ''})`);
+        }
+      }
+    }
+    if (zpr.length) notes.push(`začátky replik proti referenci: ${zpr.join('; ')}`);
+  }
+
+  // a4) posun části PODLE ZVUKU (kontrola na více místech, 2. průchod)
+  for (const q of opts.shiftParts || []) {
+    const part = parts[q.part];
+    if (!part) continue;
+    for (const x of part) { if (x.ns < 0) continue; x.ns += q.off; x.ne += q.off; }
+  }
+
   // b) vyřazené řádky: posun předchozí dialogové repliky, jinak následující
   const keptByTime = [...prep.kept].filter((x) => x.ns >= 0).sort((a, b) => a.s - b.s);
   const shiftAt = (t) => {     // posun dialogu v čase t (předchozí replika; mezi dvěma s plynulým posunem)
@@ -447,14 +539,17 @@ export function finishCz(prep, outputText, refIv, opts = {}) {
   }
 
   // c) pojistka + skóre jistoty
-  warnings.push(...warningsFor(prep.kept));
-  let score = null;
+  const jumps = warningsFor(prep.kept);
+  warnings.push(...jumps);
+  let score = null, scoreWarn = null;
   if (ref) {
     const sc = scoreOf(prep.kept, ref);
     score = Math.round(sc.cov * 100);
     notes.push(sc.note);
-    if (sc.warn) warnings.push(sc.warn);
+    if (sc.warn) { warnings.push(sc.warn); scoreWarn = sc.warn; }
   }
+  // stojí za kontrolu zvukem na více místech: nízká shoda nebo skok dlouhého úseku
+  const spotWorth = !!scoreWarn || jumps.some((w) => /posunuté o/.test(w));
 
   // složit celý soubor z originálu
   const lines = [...prep.ass.lines];
@@ -465,25 +560,81 @@ export function finishCz(prep, outputText, refIv, opts = {}) {
     const lead = (lines[x.li].match(/^\s*/) || [''])[0];
     lines[x.li] = `${lead}${x.kind}: ${f.join(',')}`;
   }
-  return { output: lines.join('\n'), notes, warnings, score, audioParts };
+  return { output: lines.join('\n'), notes, warnings, score, audioParts, scoreWarn, spotWorth };
 }
 
 // Úloha pro službu audiosync: výřez zvuku kolem části (±10 s) v čase VIDEA a titulky
 // části s časy relativně k začátku výřezu (s dnešním posunem). Výsledný posun části
 // = ap.off + offset_ms z LAPSE.
 const AUDIO_PAD = 10000, AUDIO_MAX = 180000;
+const srtTime = (v) => { v = Math.max(0, Math.round(v)); return `${pad(Math.floor(v / 3600000))}:${pad(Math.floor(v / 60000) % 60)}:${pad(Math.floor(v / 1000) % 60)},${pad(v % 1000, 3)}`; };
+const cleanText = (t) => String(t || '').replace(/\{[^}]*\}/g, '').replace(/\\[Nn]/g, '\n').trim() || '.';
+// repliky [{t0, t1, text}] v čase VIDEA → SRT s časy relativně k začátku výřezu w0
+const srtRel = (lines, w0) => lines.map((x, i) => `${i + 1}\n${srtTime(x.t0 - w0)} --> ${srtTime(x.t1 - w0)}\n${cleanText(x.text)}\n`).join('\n');
 export function audioJob(prep, ap) {
   const lines = prep.kept.filter((x) => x.s >= ap.from && x.s <= ap.to).sort((a, b) => a.s - b.s);
   if (lines.length < 3) return null;
   const w0 = Math.max(0, ap.from + ap.off - AUDIO_PAD);
   const w1 = Math.max(...lines.map((x) => x.e)) + ap.off + AUDIO_PAD;
   if (w1 - w0 > AUDIO_MAX) return null;
-  const f = (v) => { v = Math.max(0, Math.round(v)); return `${pad(Math.floor(v / 3600000))}:${pad(Math.floor(v / 60000) % 60)}:${pad(Math.floor(v / 1000) % 60)},${pad(v % 1000, 3)}`; };
-  const srt = lines.map((x, i) => {
-    const txt = x.text.replace(/\{[^}]*\}/g, '').replace(/\\[Nn]/g, '\n').trim() || '.';
-    return `${i + 1}\n${f(x.s + ap.off - w0)} --> ${f(x.e + ap.off - w0)}\n${txt}\n`;
-  }).join('\n');
+  const srt = srtRel(lines.map((x) => ({ t0: x.s + ap.off, t1: x.e + ap.off, text: x.text })), w0);
   return { start_ms: Math.round(w0), dur_ms: Math.round(w1 - w0), srt, cues: lines.length };
+}
+
+// ── A) kontrola celé epizody zvukem na několika místech ──────────────────────
+// Celá epizoda naráz zvukem nejde (LAPSE na LvB E7: „nothing") a stahovat ji celou
+// je zbytečné. Jako Nuvio AutoSync: vyberou se SPOT_N míst s hustým dialogem
+// rozprostřená po epizodě (bez prvních/posledních 3 min a bez písní), z každého
+// se přečte jen ~50 s zvuku a LAPSE řekne, o kolik HOTOVÉ titulky na tom místě
+// nesedí (0 = sedí). Vrací úlohy pro audiosync s časy už po přečasu.
+function pickSpots(lines, avoid) {
+  const L = lines.filter((x) => x.t1 - x.t0 >= 300 && x.t1 - x.t0 <= 8000).sort((a, b) => a.t0 - b.t0);
+  if (L.length < SPOT_MIN_LINES) return [];
+  const A = SPOT_SKIP_HEAD, B = Math.max(...L.map((x) => x.t1)) - SPOT_SKIP_TAIL;
+  if (B - A < SPOT_LEN * 2) return [];
+  const cands = [];
+  let j = 0;
+  for (let i = 0; i < L.length; i++) {
+    if (L[i].t0 < A) continue;
+    j = Math.max(j, i);
+    while (j + 1 < L.length && L[j + 1].t1 - L[i].t0 <= SPOT_LEN) j++;
+    const w = L.slice(i, j + 1);
+    if (w.length < SPOT_MIN_LINES) continue;
+    const a = L[i].t0, b = Math.max(...w.map((x) => x.t1));
+    if (b > B) break;
+    if (avoid.some(([s, e]) => a < e + SPOT_PAD && b > s - SPOT_PAD)) continue;   // píseň v okně
+    if (new Set(w.map((x) => x.part)).size > 1) continue;                         // přes hranici částí
+    cands.push({ a, b, w });
+  }
+  // z každé třetiny epizody to nejhustší místo (nepřekrývající se)
+  const out = [];
+  for (let k = 0; k < SPOT_N; k++) {
+    const s0 = A + ((B - A) * k) / SPOT_N, s1 = A + ((B - A) * (k + 1)) / SPOT_N;
+    const c = cands
+      .filter((q) => q.a >= s0 && q.a < s1 && !out.some((o) => q.a < o.b + SPOT_PAD * 2 && q.b > o.a - SPOT_PAD * 2))
+      .sort((x, y) => y.w.length - x.w.length)[0];
+    if (c) out.push(c);
+  }
+  return out.map((c) => {
+    const w0 = Math.max(0, c.a - SPOT_PAD), w1 = c.b + SPOT_PAD;
+    return { start_ms: Math.round(w0), dur_ms: Math.round(w1 - w0), srt: srtRel(c.w, w0), cues: c.w.length, at: c.a, part: c.w[0].part };
+  });
+}
+/** Místa pro kontrolu zvukem z HOTOVÉHO ASS výsledku (po finishCz). part = index části mezi písněmi. */
+export function spotJobs(prep) {
+  if (!prep || prep.mode !== 'ass') return [];
+  // písně v čase videa (podle vyřazených řádků, které už mají posun)
+  const avoid = prep.songs.map((c) => {
+    const xs = prep.ev.filter((x) => x.out && x.s >= c.s - 1000 && x.s <= c.e + 1000 && x.ns != null);
+    return xs.length ? [Math.min(...xs.map((x) => x.ns)), Math.max(...xs.map((x) => x.ne))] : null;
+  }).filter(Boolean);
+  const partOf = (x) => prep.songs.filter((c) => c.s <= x.s).length;
+  const lines = prep.kept.filter((x) => x.ns >= 0).map((x) => ({ t0: x.ns, t1: Math.max(x.ne, x.ns), text: x.text, part: partOf(x) }));
+  return pickSpots(lines, avoid);
+}
+/** Totéž pro SRT/postaru (bez stylů → písně nepoznám; chrání jen vynechání začátku a konce). */
+export function spotJobsPlain(outputText) {
+  return pickSpots(intervalsOf(String(outputText)).map((iv) => ({ t0: iv.s, t1: iv.e, text: '.', part: 0 })), []);
 }
 
 /** Jen kontrola výsledku (SRT/postaru): porovná vstup a výstup replik po pořadí (+ skóre). */
@@ -494,12 +645,13 @@ export function checkOnly(czBuf, outputText, refIv = null) {
   const items = A.map((a) => ({ s: a.s, e: a.e }));
   markClamped(items, B.map((b) => b.s), B.map((b) => b.e));
   const warnings = warningsFor(items), notes = [];
-  let score = null;
+  const spotWorthJump = warnings.some((w) => /posunuté o/.test(w));
+  let score = null, scoreWarn = null;
   if (refIv && refIv.length >= 20) {
     const sc = scoreOf(items, mergeIv(refIv));
     score = Math.round(sc.cov * 100);
     notes.push(sc.note);
-    if (sc.warn) warnings.push(sc.warn);
+    if (sc.warn) { warnings.push(sc.warn); scoreWarn = sc.warn; }
   }
-  return { warnings, notes, score };
+  return { warnings, notes, score, scoreWarn, spotWorth: !!scoreWarn || spotWorthJump };
 }
