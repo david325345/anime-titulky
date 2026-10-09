@@ -23,6 +23,7 @@ import AdmZip from 'adm-zip';
 import { r2PublicUrl, r2Get, r2Delete } from './r2.js';
 import { liveDbGzip, backupDbToR2, startDbBackup, restoreDbFromBuffer } from './backup.js';
 import zlib from 'node:zlib';
+import { beginSubsBatch, endSubsBatch } from './notify.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -891,6 +892,8 @@ app.post('/api/bulk-zip-commit', express.json({ limit: '80mb' }), async (req, re
 
   const chyby = [];
   let nahrano = 0;
+  beginSubsBatch();          // addon dostane jednu zprávu za celé hromadné nahrání (notify.js)
+  try {
   for (const [entryName, subIdRaw] of Object.entries(map)) {
     const subId = Number(subIdRaw);
     try {
@@ -912,6 +915,9 @@ app.post('/api/bulk-zip-commit', express.json({ limit: '80mb' }), async (req, re
     } catch (e) {
       chyby.push({ entry: entryName, error: e.message });
     }
+  }
+  } finally {
+    endSubsBatch();
   }
   res.json({ ok: true, uploaded: nahrano, errors: chyby });
 });
