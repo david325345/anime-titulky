@@ -11,7 +11,7 @@ import {
   getDownloadCandidates, pendingExternByDomain, hiyoriIdForAnime,
 } from '../db.js';
 import { lookupAnilist } from './anilist.js';
-import { beginSubsBatch, endSubsBatch } from '../notify.js';
+import { beginSubsBatch, endSubsBatch, asManualUpload, manualKeyOf } from '../notify.js';
 
 let running = false;
 export const isRunning = () => running;
@@ -443,14 +443,15 @@ export async function downloadSingle(subId, { log = console.log } = {}) {
       }
       res = ext;
     }
-    markDownloaded({
+    // ruční ⬇ → zpráva addonu počká, až bude anime kompletní (notify.js)
+    asManualUpload(manualKeyOf(sub), () => markDownloaded({
       sub_id: subId,
       filename: res.filename,
       local_path: res.local_path,
       file_bytes: res.file_bytes,
       r2_key: res.r2_key ?? null,
         unused_variants: res.unused_variants ?? null,
-    });
+    }));
     log(`✓ ručně staženo sub ${subId} (${res.filename})`);
     return { ok: true, filename: res.filename, file_bytes: res.file_bytes };
   } catch (e) {
