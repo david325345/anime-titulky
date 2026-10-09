@@ -23,7 +23,7 @@ import AdmZip from 'adm-zip';
 import { r2PublicUrl, r2Get, r2Delete } from './r2.js';
 import { liveDbGzip, backupDbToR2, startDbBackup, restoreDbFromBuffer } from './backup.js';
 import zlib from 'node:zlib';
-import { beginSubsBatch, endSubsBatch } from './notify.js';
+import { beginSubsBatch, endSubsBatch, asManualUpload, manualKeyOf } from './notify.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -846,13 +846,14 @@ app.post('/api/hanabi-link', express.json(), async (req, res) => {
 
   try {
     const saved = await hanabi.downloadFromUrl(sub, url);
-    markDownloaded({
+    // ruční akce → zpráva addonu počká, až bude anime kompletní (notify.js)
+    asManualUpload(manualKeyOf(sub), () => markDownloaded({
       sub_id: subId,
       filename: saved.filename,
       local_path: saved.local_path,
       file_bytes: saved.file_bytes,
       r2_key: saved.r2_key ?? null,
-    });
+    }));
     res.json({ ok: true, sub_id: subId, filename: saved.filename, file_bytes: saved.file_bytes });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -957,13 +958,14 @@ app.post('/api/upload-sub',
       const grp = sub.group_name || (name.match(/\[([^\]]+)\]/)?.[1]?.trim() ?? null);
       const saved = await saveSubFile({ ...sub, group_name: grp }, buf, name);
 
-      markDownloaded({
+      // ruční nahrání → zpráva addonu počká, až bude anime kompletní (notify.js)
+      asManualUpload(manualKeyOf(sub), () => markDownloaded({
         sub_id: subId,
         filename: saved.filename,
         local_path: saved.local_path,
         file_bytes: saved.file_bytes,
         r2_key: saved.r2_key ?? null,
-      });
+      }));
       res.json({ ok: true, sub_id: subId, filename: saved.filename, file_bytes: saved.file_bytes });
     } catch (e) {
       res.status(500).json({ error: e.message });
