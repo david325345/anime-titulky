@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CONFIG } from './config.js';
 import { classifyQuality } from './scraper/quality.js';
+import { notifySubsChanged } from './notify.js';
 
 fs.mkdirSync(CONFIG.dataDir, { recursive: true });
 export const dbPath = path.join(CONFIG.dataDir, 'hiyori.db');
@@ -307,8 +308,12 @@ const _markDownloaded = db.prepare(`
 const _markFailed = db.prepare(
   "UPDATE subs SET status='failed', error=@error WHERE sub_id=@sub_id"
 );
-export const markDownloaded = (row) =>
-  _markDownloaded.run({ downloaded_at: new Date().toISOString(), unused_variants: null, ...row });
+// po úspěšném zápisu dá vědět addonu (notify.js — sdružuje, v dávce posílá až na konci)
+export const markDownloaded = (row) => {
+  const r = _markDownloaded.run({ downloaded_at: new Date().toISOString(), unused_variants: null, ...row });
+  if (r.changes) notifySubsChanged();
+  return r;
+};
 export const markFailed = (sub_id, error) =>
   _markFailed.run({ sub_id, error: String(error).slice(0, 500) });
 // titulek na zdroji ještě není → nechat ve frontě, jen poznamenat proč
@@ -549,7 +554,7 @@ export function maxEpisodeForHiyoriId(hiyori_id) {
 // takže se u něj v dashboardu zase objeví 📤 a ⬇. Samotný soubor na R2 maže
 // volající (server.js), tady jen čistíme evidenci.
 export function resetSubDownload(sub_id, status) {
-  return db
+  const n = db
     .prepare(
       `UPDATE subs
           SET status = @status, r2_key = NULL, filename = NULL,
@@ -557,6 +562,8 @@ export function resetSubDownload(sub_id, status) {
         WHERE sub_id = @sub_id`
     )
     .run({ sub_id, status }).changes;
+  if (n) notifySubsChanged();          // titulek zmizí z „Dnes přidaných"
+  return n;
 }
 
 export const recentSubs = (limit = 100) =>
@@ -648,7 +655,7 @@ const _saveMachineSub = db.prepare(`
 `);
 export function saveMachineSub(row) {
   const now = new Date().toISOString();
-  return _saveMachineSub.run({
+  const r = _saveMachineSub.run({
     first_seen: now,
     downloaded_at: now,
     machine_source: 'hiyori',
@@ -659,6 +666,8 @@ export function saveMachineSub(row) {
     // kvalita přečasu z jeho release („🤖 BD · EMBER" → BD, skupina EMBER)
     quality: row.quality ?? classifyQuality(row.release),
   });
+  if (r.changes) notifySubsChanged();
+  return r;
 }
 
 // Pro sadu sub_id vrátí mapu { original_sub_id: machineRow } — web podle ní
@@ -680,7 +689,11 @@ export function machineVersionsFor(subIds, source = 'hiyori') {
 
 // smazání záznamu z DB (soubor na R2 zůstává). Vrací počet smazaných řádků.
 const _deleteSub = db.prepare('DELETE FROM subs WHERE sub_id=?');
-export const deleteSub = (sub_id) => _deleteSub.run(sub_id).changes;
+export const deleteSub = (sub_id) => {
+  const n = _deleteSub.run(sub_id).changes;
+  if (n) notifySubsChanged();          // smazaný titulek zmizí z „Dnes přidaných"
+  return n;
+};
 
 export const recentRuns = (limit = 12) =>
   db.prepare('SELECT * FROM runs ORDER BY id DESC LIMIT ?').all(limit);
