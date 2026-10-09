@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CONFIG } from './config.js';
 import { classifyQuality } from './scraper/quality.js';
-import { notifySubsChanged } from './notify.js';
+import { notifySubsChanged, setIncompleteCheck } from './notify.js';
 
 fs.mkdirSync(CONFIG.dataDir, { recursive: true });
 export const dbPath = path.join(CONFIG.dataDir, 'hiyori.db');
@@ -686,6 +686,22 @@ export function machineVersionsFor(subIds, source = 'hiyori') {
   for (const r of rows) map[r.machine_of] = r;
   return map;
 }
+
+// notify.js: má anime (klíč „al:ID:jazyk" / „mal:…" / „hy:…") ještě díly bez souboru na R2?
+// Ruční nahrávání po jednom čeká se zprávou addonu, až bude anime kompletní (strojové
+// verze a přeskočené záznamy se nepočítají). Dotazy se připraví až při prvním použití.
+const _undlStmts = {};
+setIncompleteCheck((key) => {
+  const [type, id, lang = ''] = String(key).split(':');
+  const col = { al: 'anilist_id', mal: 'mal_id', hy: 'hiyori_id' }[type];
+  if (!col || !Number(id)) return false;
+  _undlStmts[col] ||= db.prepare(
+    `SELECT COUNT(*) AS c FROM subs
+      WHERE ${col} = ? AND COALESCE(lang,'') = ? AND machine_of IS NULL
+        AND (r2_key IS NULL OR r2_key = '') AND COALESCE(status,'') <> 'skipped'`
+  );
+  return _undlStmts[col].get(Number(id), lang).c > 0;
+});
 
 // smazání záznamu z DB (soubor na R2 zůstává). Vrací počet smazaných řádků.
 const _deleteSub = db.prepare('DELETE FROM subs WHERE sub_id=?');
