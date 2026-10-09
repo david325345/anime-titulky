@@ -11,6 +11,7 @@ import {
   getDownloadCandidates, pendingExternByDomain, hiyoriIdForAnime,
 } from '../db.js';
 import { lookupAnilist } from './anilist.js';
+import { beginSubsBatch, endSubsBatch } from '../notify.js';
 
 let running = false;
 export const isRunning = () => running;
@@ -390,6 +391,7 @@ export async function downloadOnce({ log = console.log } = {}) {
   }
   running = true;
   const runId = startRun();
+  beginSubsBatch();          // addon dostane JEDNU zprávu až na konci běhu (notify.js)
   const stats = {
     feed_cards: 0, anime_checked: 0, new_subs: 0,
     downloaded: 0, extern_pending: 0, failed: 0,
@@ -407,6 +409,7 @@ export async function downloadOnce({ log = console.log } = {}) {
   } finally {
     finishRun({ id: runId, ok, error: errMsg, ...stats });
     running = false;
+    endSubsBatch();            // pošle, co se stihlo stáhnout (i po chybě); nic nového = nic
   }
   return { ok: !!ok, ...stats, error: errMsg };
 }
@@ -474,6 +477,7 @@ export async function runOnce({ log = console.log } = {}) {
   assertConfig();
 
   const runId = startRun();
+  beginSubsBatch();          // addon dostane JEDNU zprávu až na konci běhu (notify.js)
   const stats = {
     feed_cards: 0, anime_checked: 0, new_subs: 0,
     downloaded: 0, extern_pending: 0, failed: 0,
@@ -545,6 +549,7 @@ export async function runOnce({ log = console.log } = {}) {
   } finally {
     finishRun({ id: runId, ok, error: errMsg, ...stats });
     running = false;
+    endSubsBatch();            // pošle, co se stihlo stáhnout (i po chybě); nic nového = nic
   }
 
   return { ok: !!ok, ...stats, error: errMsg };
