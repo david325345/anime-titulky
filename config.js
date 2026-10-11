@@ -111,9 +111,13 @@ export const CONFIG = {
   // Český "fetcher" agent (agent.php na CZ hostingu). Weby ange.3mka.cz a wosir.cz
   // blokují zahraniční/datacenter IP → stahujeme přes něj. Bez AGENT_URL se tyto
   // zdroje nestahují (parser hodí srozumitelnou chybu).
+  // NOVĚ: AGENT_PROXY = HTTP proxy s českou IP (tinyproxy na Forpsi VPS, filtr jen na
+  // povolené domény) → stahuje se přímo přes ni, šifrovaně až na web. Když je nastavená,
+  // má přednost; agent.php (AGENT_URL/AGENT_TOKEN) zůstává jako záloha.
   agent: {
     url: process.env.AGENT_URL || '',
     token: process.env.AGENT_TOKEN || '',
+    proxy: (process.env.AGENT_PROXY || '').trim(),
   },
 
   // wosir.cz — vyžaduje vlastní účet (přihlášení e-mailem).
