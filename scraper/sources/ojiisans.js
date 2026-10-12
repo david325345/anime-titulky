@@ -53,7 +53,11 @@ export async function download(sub) {
   const page = await agentFetch(sub.url, { follow: true });
   if (page.status !== 200) throw new Error(`ojiisans: HTTP ${page.status} (${sub.url}).`);
   const html = page.buf.toString('utf8');
-  if (/Just a moment|challenge-platform/i.test(html)) {
+  // Skutečná výzva = stránka „Just a moment…" (vrací 403, chytí se i řádek výš).
+  // NE „challenge-platform": to je měřicí skript /cdn-cgi/challenge-platform/scripts/jsd/main.js,
+  // který Cloudflare vkládá i do NORMÁLNÍCH stránek (12.10.: Sayonara Lara HTTP 200, 5 odkazů,
+  // a parser to mylně hlásil jako výzvu).
+  if (/Just a moment/i.test(html)) {
     throw new Error('ojiisans: Cloudflare challenge i přes agenta (změnila se IP reputace?).');
   }
 
