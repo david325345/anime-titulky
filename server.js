@@ -11,6 +11,7 @@ import {
   listAkihabaraAnime, akihabaraAnimeDetail, akihabaraStats, resetSubDownload,
   machineVersionsFor, getAkiSub, bulkBdTargetsHiyori, bulkBdTargetsAki, getBdPin, clearBdPin,
   insertRequest, listRequests, getRequest, setRequestStatus, requestStatusForAnilist,
+  upsertAddonRequest, listAddonRequests, getAddonRequest, setAddonRequestStatus,
   subsByAnime,
   backfillQuality, migrateMachineIds, subSetSiblings, updateSubMetaMany,
 } from './db.js';
@@ -23,6 +24,7 @@ import AdmZip from 'adm-zip';
 import { r2PublicUrl, r2Get, r2Delete } from './r2.js';
 import { liveDbGzip, backupDbToR2, startDbBackup, restoreDbFromBuffer } from './backup.js';
 import zlib from 'node:zlib';
+import crypto from 'node:crypto';
 import { beginSubsBatch, endSubsBatch, asManualUpload, manualKeyOf } from './notify.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -169,6 +171,48 @@ app.post('/api/request-anime', express.json(), (req, res) => {
   res.json(r); // { status: 'ok' } nebo { status: 'already_requested' }
 });
 
+// POST /api/requests — žádost o titulky z ADDONU (uživatel ve Stremiu/Nuviu klikl ⏳).
+// Chráněno hlavičkou X-Notify-Token = NOTIFY_TOKEN (stejný token, jaký služba posílá
+// addonu). Addon kontroluje jen HTTP stav (2xx = převzato); tělo je pro log/ladění.
+// GET /api/requests (seznam žádostí z extension) zůstává za přihlášením níž.
+const tokenOk = (got) => {
+  const want = String(process.env.NOTIFY_TOKEN || '');
+  const a = Buffer.from(String(got || '')), b = Buffer.from(want);
+  return want.length > 0 && a.length === b.length && crypto.timingSafeEqual(a, b);
+};
+app.post('/api/requests', express.json(), (req, res) => {
+  if (!process.env.NOTIFY_TOKEN) return res.status(503).json({ ok: false, error: 'NOTIFY_TOKEN není nastaven.' });
+  if (!tokenOk(req.headers['x-notify-token'])) return res.status(401).json({ ok: false, error: 'Neplatný token.' });
+  const b = req.body || {};
+  const int = (v) => (v == null || v === '' ? null : Number.isInteger(Number(v)) ? Number(v) : NaN);
+  const anilist_id = int(b.anilist_id);
+  const scope = String(b.scope || '');
+  const episode = int(b.episode);
+  if (!(anilist_id > 0)) return res.status(400).json({ ok: false, error: 'Chybí platné anilist_id.' });
+  if (!['anime', 'episode'].includes(scope)) return res.status(400).json({ ok: false, error: 'scope musí být "anime" nebo "episode".' });
+  // pozor: v JS platí null >= 0 → číslo dílu ověřit přes Number.isInteger
+  if (scope === 'episode' && !(Number.isInteger(episode) && episode >= 0)) return res.status(400).json({ ok: false, error: 'U scope "episode" chybí číslo dílu.' });
+  const row = {
+    anilist_id,
+    mal_id: int(b.mal_id) > 0 ? int(b.mal_id) : null,
+    scope,
+    episode: scope === 'episode' ? episode : null,
+    imdb_id: /^tt\d+$/.test(String(b.imdb_id || '')) ? String(b.imdb_id) : null,
+    imdb_season: int(b.imdb_season) >= 0 ? int(b.imdb_season) : null,
+    imdb_episode: int(b.imdb_episode) >= 0 ? int(b.imdb_episode) : null,
+    title: b.title ? String(b.title).slice(0, 300) : null,
+    requesters: int(b.requesters) > 0 ? int(b.requesters) : 1,
+    requested_at: !isNaN(Date.parse(b.requested_at)) ? new Date(b.requested_at).toISOString() : null,
+  };
+  // titulky už máme (díl, u celého anime jakékoli) → nic neukládat
+  const have = findSubs({ anilist: row.anilist_id, mal: row.mal_id, episode: row.episode });
+  if (have.rows.length) return res.json({ ok: true, status: 'available', subs: have.rows.length });
+  const r = upsertAddonRequest(row);
+  console.log(`[addon-request] ${r.status} #${r.id} AL${row.anilist_id}${row.episode != null ? ` E${row.episode}` : ' (celé anime)'} ` +
+    `„${row.title || r.title || '?'}" — žadatelů ${r.requesters}${r.status === 'existing' ? `, stav ${r.state}` : ''}`);
+  res.json({ ok: true, id: r.id, status: r.status, requesters: r.requesters });
+});
+
 // GET /api/recent[?days=N] — dnes přidané stažené titulky (na R2), seskupené.
 // Bez days = dnešní den od půlnoci. Veřejné (pro addon).
 app.get('/api/recent', (req, res) => {
@@ -284,6 +328,50 @@ app.post('/api/requests/:id/reject', requireUser1, (req, res) => {
   const n = setRequestStatus(req.params.id, 'rejected');
   if (!n) return res.status(404).json({ error: 'Požadavek nenalezen.' });
   res.json({ ok: true });
+});
+
+// --- Žádosti o titulky z addonu — admin (za basicAuth) ---
+
+// GET /api/addon-requests?status=open|new|accepted|done|rejected|all
+app.get('/api/addon-requests', (req, res) => {
+  res.json({ requests: listAddonRequests(String(req.query.status || 'open')) });
+});
+
+// POST /api/addon-requests/:id/status { status: accepted|done|rejected|new, note? }
+// Změna stavu → addon dostane zprávu (notify.js notifyRequestStatus).
+app.post('/api/addon-requests/:id/status', requireUser1, express.json(), (req, res) => {
+  const status = String(req.body?.status || '');
+  if (!['new', 'accepted', 'done', 'rejected'].includes(status)) return res.status(400).json({ error: 'Neplatný stav.' });
+  const note = req.body?.note ? String(req.body.note).slice(0, 500) : null;
+  const row = setAddonRequestStatus(req.params.id, status, note);
+  if (!row) return res.status(404).json({ error: 'Žádost nenalezena.' });
+  res.json({ ok: true, request: row });
+});
+
+// POST /api/addon-requests/:id/add-hiyori { url } — přidá anime z hiyori (jako
+// „Přidat anime z hiyori") a žádost označí jako přijatou.
+app.post('/api/addon-requests/:id/add-hiyori', requireUser1, express.json(), async (req, res) => {
+  const reqRow = getAddonRequest(req.params.id);
+  if (!reqRow) return res.status(404).json({ error: 'Žádost nenalezena.' });
+  const input = String(req.body?.url || '').trim();
+  const m = input.match(/\/anime\/(\d+)/) || input.match(/^(\d+)$/);
+  const hiyoriId = m ? Number(m[1]) : null;
+  if (!hiyoriId) return res.status(400).json({ error: 'Zadej odkaz na anime z hiyori (např. https://hiyori.cz/anime/21389) nebo číslo.' });
+  try {
+    const r = await ingestAnime(hiyoriId, {}, { manualAdd: true });
+    if (r.anilistId && Number(r.anilistId) !== Number(reqRow.anilist_id)) {
+      console.warn(`[addon-request] #${reqRow.id}: hiyori ${hiyoriId} má AniList ${r.anilistId}, žádost ${reqRow.anilist_id}`);
+    }
+    const row = getAddonRequest(reqRow.id);          // mohla se mezitím sama vyřídit (titulek se stáhl)
+    const upd = row.status === 'done' ? row : setAddonRequestStatus(reqRow.id, 'accepted');
+    res.json({
+      ok: true, request: upd, hiyori_id: hiyoriId,
+      title: (r.title || '').replace(/\s*-\s*Hiyori$/i, ''),
+      anilist_id: r.anilistId, found: r.found, added: r.added, blocked: r.blocked,
+    });
+  } catch (e) {
+    res.status(500).json({ error: 'Nepodařilo se přidat anime: ' + e.message });
+  }
 });
 
 // role přihlášeného účtu — frontend podle toho skryje mazací tlačítka user2

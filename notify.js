@@ -145,3 +145,35 @@ async function flush() {
     }
   }));
 }
+
+// ── změna stavu žádosti o titulky (addon → POST /api/requests) ───────────────
+// Při přijetí / vyřízení / zamítnutí pošle addonu hned (bez sdružování):
+//   POST <addon>/api/subs-requests/update, X-Notify-Token: NOTIFY_TOKEN,
+//   { anilist_id, episode (null u celého anime), status, note }
+// Adresa: NOTIFY_REQUESTS_URL, jinak odvozená z první adresy v NOTIFY_URLS
+// (stejný addon, jen jiná cesta). Chyba (addon neběží, endpoint zatím chybí → 404)
+// se jen zaloguje; addon žádosti po 30 dnech zahodí sám.
+const REQ_URL = (() => {
+  const own = String(process.env.NOTIFY_REQUESTS_URL || '').trim();
+  if (own) return own;
+  if (!URLS.length) return '';
+  try { return new URL('/api/subs-requests/update', URLS[0]).href; } catch { return ''; }
+})();
+
+export async function notifyRequestStatus({ anilist_id, episode = null, status, note = null }) {
+  if (!REQ_URL || !anilist_id || !status) return;
+  const body = JSON.stringify({ anilist_id, episode: episode ?? null, status, note: note || null });
+  try {
+    const res = await fetch(REQ_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(TOKEN ? { 'X-Notify-Token': TOKEN } : {}) },
+      body,
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    const kde = `AL${anilist_id}${episode != null ? ` E${episode}` : ''}`;
+    if (res.ok) console.log(`[notify] žádost ${kde} → ${status} (HTTP ${res.status})`);
+    else console.warn(`[notify] žádost ${kde} → ${status}: addon odmítl, HTTP ${res.status}`);
+  } catch (e) {
+    console.warn(`[notify] žádost AL${anilist_id}: addon nedostupný (${e.message})`);
+  }
+}

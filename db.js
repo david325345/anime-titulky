@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CONFIG } from './config.js';
 import { classifyQuality } from './scraper/quality.js';
-import { notifySubsChanged, setIncompleteCheck } from './notify.js';
+import { notifySubsChanged, setIncompleteCheck, notifyRequestStatus } from './notify.js';
 
 fs.mkdirSync(CONFIG.dataDir, { recursive: true });
 export const dbPath = path.join(CONFIG.dataDir, 'hiyori.db');
@@ -212,6 +212,99 @@ export function setRequestStatus(id, status) {
   return db.prepare('UPDATE requests SET status=? WHERE id=?').run(status, Number(id)).changes;
 }
 
+// ── Žádosti o titulky z ADDONU (POST /api/requests, token) ───────────────────
+// Na rozdíl od extension (celé anime podle hiyori_id) chodí z addonu AniList ID,
+// často bez hiyori, a i žádosti na jednotlivý DÍL (číslování AniList záznamu).
+// Jedna žádost na anilist + scope + díl; opakovaná zpráva jen obnoví počet žadatelů.
+// Stavy: new → accepted → done | rejected (+ note = důvod zamítnutí).
+db.exec(`CREATE TABLE IF NOT EXISTS addon_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  anilist_id INTEGER NOT NULL,
+  mal_id INTEGER,
+  scope TEXT NOT NULL,              -- 'anime' | 'episode'
+  episode INTEGER,                  -- díl v číslování AniList; u 'anime' NULL
+  imdb_id TEXT,
+  imdb_season INTEGER,
+  imdb_episode INTEGER,
+  title TEXT,
+  requesters INTEGER DEFAULT 1,
+  requested_at TEXT,                -- kdy žádost poprvé přišla (dle addonu)
+  updated_at TEXT,                  -- poslední zpráva z addonu
+  status TEXT DEFAULT 'new',
+  note TEXT,
+  status_at TEXT
+)`);
+db.exec('CREATE INDEX IF NOT EXISTS idx_addon_req_al ON addon_requests(anilist_id, scope, episode)');
+db.exec('CREATE INDEX IF NOT EXISTS idx_addon_req_status ON addon_requests(status)');
+
+/** Uloží žádost z addonu. Vrací { id, status: 'new'|'existing', requesters, state }. */
+export function upsertAddonRequest(r) {
+  const now = new Date().toISOString();
+  const ep = r.scope === 'episode' ? r.episode : null;
+  const find = db.prepare(
+    `SELECT * FROM addon_requests WHERE anilist_id=? AND scope=? AND ${ep == null ? 'episode IS NULL' : 'episode=?'}`
+  );
+  const prev = ep == null ? find.get(r.anilist_id, r.scope) : find.get(r.anilist_id, r.scope, ep);
+  if (prev) {
+    // existující žádost: obnov počet žadatelů, čas a doplň chybějící údaje. Stav se NEMĚNÍ
+    // (zamítnutá zůstane zamítnutá — addon ji po zprávě o zamítnutí nenabízí; vyřízená taky).
+    db.prepare(
+      `UPDATE addon_requests SET requesters=@requesters, updated_at=@now,
+         mal_id=COALESCE(mal_id,@mal_id), imdb_id=COALESCE(imdb_id,@imdb_id),
+         imdb_season=COALESCE(imdb_season,@imdb_season), imdb_episode=COALESCE(imdb_episode,@imdb_episode),
+         title=COALESCE(title,@title)
+       WHERE id=@id`
+    ).run({ ...r, requesters: r.requesters ?? prev.requesters, now, id: prev.id });
+    return { id: prev.id, status: 'existing', requesters: r.requesters ?? prev.requesters, state: prev.status, title: prev.title };
+  }
+  const info = db.prepare(
+    `INSERT INTO addon_requests (anilist_id, mal_id, scope, episode, imdb_id, imdb_season, imdb_episode,
+       title, requesters, requested_at, updated_at, status)
+     VALUES (@anilist_id, @mal_id, @scope, @episode, @imdb_id, @imdb_season, @imdb_episode,
+       @title, @requesters, @requested_at, @now, 'new')`
+  ).run({ ...r, episode: ep, requesters: r.requesters ?? 1, requested_at: r.requested_at || now, now });
+  return { id: Number(info.lastInsertRowid), status: 'new', requesters: r.requesters ?? 1, state: 'new' };
+}
+
+/** Seznam pro dashboard: 'open' = new+accepted (výchozí), nebo konkrétní stav, nebo 'all'. */
+export function listAddonRequests(which = 'open') {
+  const where = which === 'all' ? '' : which === 'open' ? "WHERE status IN ('new','accepted')" : 'WHERE status=@which';
+  return db.prepare(
+    `SELECT * FROM addon_requests ${where}
+      ORDER BY CASE status WHEN 'new' THEN 0 WHEN 'accepted' THEN 1 ELSE 2 END,
+               requesters DESC, updated_at DESC LIMIT 500`
+  ).all({ which });
+}
+export const getAddonRequest = (id) => db.prepare('SELECT * FROM addon_requests WHERE id=?').get(Number(id)) || null;
+
+/** Změní stav žádosti a dá vědět addonu. Vrací nový řádek nebo null. */
+export function setAddonRequestStatus(id, status, note = null) {
+  const prev = getAddonRequest(id);
+  if (!prev) return null;
+  db.prepare('UPDATE addon_requests SET status=?, note=?, status_at=? WHERE id=?')
+    .run(status, note ?? (status === 'rejected' ? prev.note : null), new Date().toISOString(), prev.id);
+  const row = getAddonRequest(prev.id);
+  if (prev.status !== status) notifyRequestStatus({ anilist_id: row.anilist_id, episode: row.episode, status, note: row.note });
+  return row;
+}
+
+// Přibyl titulek → otevřené žádosti na ten díl (nebo na celé anime) jsou vyřízené.
+// Volá markDownloaded / saveMachineSub. Chyba tu nesmí shodit stahování.
+function resolveAddonRequests(sub) {
+  try {
+    if (!sub || (!sub.anilist_id && !sub.mal_id)) return;
+    const rows = db.prepare(
+      `SELECT id FROM addon_requests
+        WHERE status IN ('new','accepted')
+          AND (anilist_id=@al OR (mal_id IS NOT NULL AND mal_id=@mal))
+          AND (scope='anime' OR (scope='episode' AND episode=@ep))`
+    ).all({ al: sub.anilist_id ?? -1, mal: sub.mal_id ?? -1, ep: sub.episode ?? -1 });
+    for (const r of rows) setAddonRequestStatus(r.id, 'done');
+  } catch (e) {
+    console.warn('[addon-requests] automatické vyřízení selhalo:', e.message);
+  }
+}
+
 // Stav požadavku pro dané anilist_id (pro /api/subs/available → extension).
 // Vrací 'pending' | 'done' | null (rejected se ignoruje = jako by nebyl).
 export function requestStatusForAnilist(anilistId) {
@@ -311,7 +404,7 @@ const _markFailed = db.prepare(
 // po úspěšném zápisu dá vědět addonu (notify.js — sdružuje, v dávce posílá až na konci)
 export const markDownloaded = (row) => {
   const r = _markDownloaded.run({ downloaded_at: new Date().toISOString(), unused_variants: null, ...row });
-  if (r.changes) notifySubsChanged();
+  if (r.changes) { notifySubsChanged(); resolveAddonRequests(getSub(row.sub_id)); }
   return r;
 };
 export const markFailed = (sub_id, error) =>
@@ -666,7 +759,7 @@ export function saveMachineSub(row) {
     // kvalita přečasu z jeho release („🤖 BD · EMBER" → BD, skupina EMBER)
     quality: row.quality ?? classifyQuality(row.release),
   });
-  if (r.changes) notifySubsChanged();
+  if (r.changes) { notifySubsChanged(); resolveAddonRequests(row); }
   return r;
 }
 
