@@ -203,7 +203,81 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-function load() { loadOverview(); loadSubs(); loadRequests(); }
+// ── Žádosti o titulky z addonu (POST /api/requests) ──────────────────────────
+async function loadAddonRequests() {
+  try {
+    const d = await (await fetch('/api/addon-requests?status=open')).json();
+    renderAddonRequests(d.requests || []);
+  } catch (e) { /* ignoruj */ }
+}
+
+function renderAddonRequests(reqs) {
+  const panel = document.getElementById('addonReqPanel');
+  const body = document.getElementById('addonReqBody');
+  if (!panel || !body) return;
+  if (!reqs.length) { panel.style.display = 'none'; return; }
+  panel.style.display = '';
+  document.getElementById('addonReqCount').textContent = `(${reqs.length})`;
+  body.innerHTML = reqs.map((r) => {
+    const title = r.title || `AniList ${r.anilist_id}`;
+    const ep = r.scope === 'anime' ? '<span class="muted">celé anime</span>'
+      : `${r.episode}${r.imdb_season != null && r.imdb_episode != null ? ` <span class="muted">(S${String(r.imdb_season).padStart(2, '0')}E${String(r.imdb_episode).padStart(2, '0')})</span>` : ''}`;
+    const state = r.status === 'accepted' ? '<span class="areq-state accepted">přijato</span>' : '<span class="areq-state new">nová</span>';
+    const links = [
+      `<a href="https://anilist.co/anime/${r.anilist_id}" target="_blank">AniList</a>`,
+      r.mal_id ? `<a href="https://myanimelist.net/anime/${r.mal_id}" target="_blank">MAL</a>` : '',
+      `<a href="https://hiyori.cz/rozcestnik?nazev=${encodeURIComponent(r.title || '')}" target="_blank" title="Najít na hiyori podle názvu">hiyori 🔍</a>`,
+    ].filter(Boolean).join(' · ');
+    const date = (r.updated_at || r.requested_at || '').replace('T', ' ').slice(0, 16);
+    const btns = canDelete ? [
+      r.status === 'new' ? `<button class="areq-btn areq-ok" data-act="accepted" data-id="${r.id}" title="Přijmout — budeme titulky shánět">✓ Přijmout</button>` : '',
+      `<button class="areq-btn" data-act="hiyori" data-id="${r.id}" title="Přidat anime z hiyori URL a žádost přijmout">＋ hiyori</button>`,
+      `<button class="areq-btn areq-ok" data-act="done" data-id="${r.id}" title="Označit jako vyřízené">✔ Vyřízeno</button>`,
+      `<button class="areq-btn areq-reject" data-act="rejected" data-id="${r.id}" title="Zamítnout s důvodem — addon ukáže „Titulky nebudou“">✗ Zamítnout</button>`,
+    ].join('') : '';
+    return `<tr>
+      <td>${escapeHtml(title)}</td>
+      <td>${ep}</td>
+      <td>${r.requesters || 1}</td>
+      <td>${state}</td>
+      <td>${links}</td>
+      <td class="muted">${date}</td>
+      <td class="req-actions">${btns}</td>
+    </tr>`;
+  }).join('');
+}
+
+const addonReqTable = document.getElementById('addonReqTable');
+if (addonReqTable) {
+  addonReqTable.addEventListener('click', async (e) => {
+    const b = e.target.closest('button.areq-btn');
+    if (!b) return;
+    const id = b.dataset.id, act = b.dataset.act;
+    let url, payload;
+    if (act === 'hiyori') {
+      const u = prompt('Odkaz na anime z hiyori (např. https://hiyori.cz/anime/21389):');
+      if (!u) return;
+      url = `/api/addon-requests/${id}/add-hiyori`; payload = { url: u };
+    } else if (act === 'rejected') {
+      const note = prompt('Důvod zamítnutí (addon ho ukáže uživateli):', 'Titulky nejsou k dispozici');
+      if (note == null) return;
+      url = `/api/addon-requests/${id}/status`; payload = { status: 'rejected', note: note.trim() || null };
+    } else {
+      url = `/api/addon-requests/${id}/status`; payload = { status: act };
+    }
+    b.disabled = true;
+    try {
+      const r = await (await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })).json();
+      if (r.error) { alert('Chyba: ' + r.error); b.disabled = false; return; }
+      if (act === 'hiyori') alert(`Přidáno: ${r.title || r.hiyori_id} — nalezeno ${r.found ?? '?'}, nových ${r.added ?? '?'}`);
+      loadAddonRequests(); if (act === 'hiyori') { loadSubs(); loadOverview(); }
+    } catch (err) {
+      alert('Chyba: ' + err.message); b.disabled = false;
+    }
+  });
+}
+
+function load() { loadOverview(); loadSubs(); loadRequests(); loadAddonRequests(); }
 
 $('#runBtn').addEventListener('click', async () => {
   $('#runBtn').disabled = true;

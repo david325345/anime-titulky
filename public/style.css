@@ -313,6 +313,8 @@ button.del-machine:disabled { opacity: .4; cursor: default; }
 /* Požadavky na přidání anime */
 #requestsTable { width: 100%; border-collapse: collapse; }
 #requestsTable th, #requestsTable td { padding: 6px 10px; text-align: left; border-bottom: 1px solid #2a2a2a; }
+#addonReqTable { width: 100%; border-collapse: collapse; }
+#addonReqTable th, #addonReqTable td { padding: 6px 10px; text-align: left; border-bottom: 1px solid #2a2a2a; }
 .req-actions { white-space: nowrap; text-align: right; }
 button.req-approve, button.req-reject {
   border-radius: 6px; padding: 3px 10px; cursor: pointer; font-size: 13px; margin-left: 6px;
@@ -322,6 +324,15 @@ button.req-approve:hover { background: rgba(80,220,120,.15); border-color: #6fdc
 button.req-reject { border-color: #a03434; color: #ff5c5c; }
 button.req-reject:hover { background: rgba(255,60,60,.15); border-color: #ff5c5c; }
 button.req-approve:disabled, button.req-reject:disabled { opacity: .5; cursor: default; }
+/* žádosti z addonu */
+button.areq-btn { padding: 2px 8px; font-size: 13px; margin-left: 4px; }
+button.areq-btn.areq-reject { border-color: #a03434; color: #ff5c5c; }
+button.areq-btn.areq-reject:hover { background: rgba(255,60,60,.15); border-color: #ff5c5c; }
+button.areq-btn.areq-ok:hover { background: rgba(80,220,120,.15); border-color: #6fdc8c; }
+button.areq-btn:disabled { opacity: .5; cursor: default; }
+.areq-state { font-size: 12px; padding: 1px 6px; border-radius: 8px; border: 1px solid currentColor; }
+.areq-state.new { color: #f0b429; }
+.areq-state.accepted { color: #5cb8ff; }
 
 /* Hromadné nahrání titulků (📦) */
 /* okno roste podle nejdelšího názvu (do šířky okna), ať se nemusí nic ořezávat */
