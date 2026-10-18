@@ -4,6 +4,7 @@
 import * as wosir from './wosir.js';
 import * as hns from './hns.js';
 import * as hannyasubs from './hannyasubs.js';
+import * as hannyasubsCz from './hannyasubs-cz.js';
 import * as kamui from './kamui.js';
 import * as underkotatsu from './underkotatsu.js';
 import * as hanabi from './hanabi.js';
@@ -19,6 +20,8 @@ const SOURCES = {
   'wosir.cz': wosir,
   'hns.sk': hns,
   'hannya-subs.blogspot.com': hannyasubs,
+  'hannya-subs.cz': hannyasubsCz,        // nový web 10/2026 (detail.js odsekává www.)
+  'www.hannya-subs.cz': hannyasubsCz,
   'kamui-subs.cz': kamui,
   'underkotatsusubs.cz': underkotatsu,
   'hanabi.fan': hanabi,
