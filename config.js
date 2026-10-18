@@ -132,6 +132,13 @@ export const CONFIG = {
     pass: process.env.GENSUBS_PASS || '',
   },
 
+  // www.hannya-subs.cz (nový web HannyaSubs 10/2026) — stahování jen pro přihlášené.
+  // HANNYA_USER = přezdívka nebo e-mail, HANNYA_PASS = heslo. Login bez captchy.
+  hannya: {
+    user: process.env.HANNYA_USER || '',
+    pass: process.env.HANNYA_PASS || '',
+  },
+
   // ── Přečas na BD („BD auto") ─────────────────────────────────────────
   // Indexer (mapování ID) — z anilist/mal získáme anidb_id. Má self-signed
   // cert, takže se k němu chodí s vypnutou verifikací certu (jen na tenhle host).
