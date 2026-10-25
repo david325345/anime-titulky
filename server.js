@@ -586,7 +586,8 @@ app.get('/api/fonts/status', (req, res) => {
 
 // nahrání fontů do knihovny: jeden font (.ttf/.otf/.ttc/.otc) nebo ZIP s fonty
 // (podsložky ZIPu se zachovají). Stejný soubor se nepřepisuje.
-app.post('/api/fonts/upload', express.raw({ type: '*/*', limit: '300mb' }), (req, res) => {
+// type: () => true — tělo se přijme i bez Content-Type (prohlížeč u .ttf typ často nepošle)
+app.post('/api/fonts/upload', express.raw({ type: () => true, limit: '300mb' }), (req, res) => {
   const rawName = String(req.query.filename || '').trim();
   if (!req.body || !req.body.length) return res.status(400).json({ error: 'Prázdný soubor.' });
   const lib = library();

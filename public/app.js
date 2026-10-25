@@ -368,7 +368,10 @@ $('#fontsFile')?.addEventListener('change', async (e) => {
   for (const [i, f] of files.entries()) {
     btn.textContent = files.length > 1 ? `Nahrávám ${i + 1}/${files.length}…` : 'Nahrávám…';
     try {
-      const r = await (await fetch(`/api/fonts/upload?filename=${encodeURIComponent(f.name)}`, { method: 'POST', body: f })).json();
+      // typ výslovně — u .ttf z Windows prohlížeč typ nezná a bez něj by server tělo zahodil
+      const r = await (await fetch(`/api/fonts/upload?filename=${encodeURIComponent(f.name)}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: f,
+      })).json();
       if (r.error) errors.push(`${f.name}: ${r.error}`);
       else { added += r.added; replaced += r.replaced; skipped += r.skipped; }
     } catch (err) {
