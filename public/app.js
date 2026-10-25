@@ -351,8 +351,19 @@ function renderFonts(d) {
   if (!wrap || !body) return;
   if (!d.missing || !d.missing.length) { wrap.style.display = 'none'; return; }
   wrap.style.display = '';
+  // u čeho font chybí: „Anime – díl 2 · CZ · Skupina · zdroj“ (prvních 15, zbytek jen počtem)
+  const whereCell = (m) => {
+    const items = (m.where || []).map((w) => {
+      const ep = w.episode != null ? ` – díl ${w.episode}` : '';
+      const extra = [w.lang, w.group, w.source].filter(Boolean).map(esc).join(' · ');
+      return `<div>${esc(w.title)}${ep}${extra ? ` <span class="muted">· ${extra}</span>` : ''}</div>`;
+    });
+    const rest = m.subs - (m.where || []).length;
+    if (rest > 0) items.push(`<div class="muted">… a ${rest} dalších</div>`);
+    return items.join('');
+  };
   body.innerHTML = d.missing.map((m) =>
-    `<tr><td>${esc(m.font)}${m.error ? ` <span class="muted" title="${esc(m.error)}">⚠</span>` : ''}</td><td>${m.subs}</td><td>${m.lines || '—'}</td></tr>`
+    `<tr><td class="nowrap">${esc(m.font)}${m.error ? ` <span class="muted" title="${esc(m.error)}">⚠</span>` : ''}</td><td class="fonts-where">${whereCell(m)}</td><td>${m.subs}</td><td>${m.lines || '—'}</td></tr>`
   ).join('');
 }
 

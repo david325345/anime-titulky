@@ -552,18 +552,36 @@ app.get('/api/akihabara/detail', (req, res) => {
 app.get('/api/fonts/status', (req, res) => {
   const lib = library();
   const { counts, missingRows } = subFontsOverview();
+  // u čeho font chybí: anime, díl, skupina, zdroj (ať je vidět, na čím webu fonty hledat)
+  const subInfo = (r) => {
+    const s = r.src === 'aki' ? getAkiSub(r.sub_id) : getSub(r.sub_id);
+    if (!s) return null;
+    return {
+      title: String(s.anime_title || '').replace(/\s*[-–]\s*Hiyori\s*$/i, '') || `#${r.sub_id}`,
+      episode: s.episode ?? null,
+      lang: s.lang || null,
+      group: s.group_name || null,
+      source: s.extern_domain || (r.src === 'aki' ? 'akihabara' : 'hiyori'),
+    };
+  };
+  const MAX_WHERE = 15;
   const agg = new Map();
   for (const r of missingRows) {
     let list = [];
     try { list = JSON.parse(r.missing || '[]') || []; } catch {}
+    let info;
     for (const m of list) {
       const k = String(m.font || '').toLowerCase();
       if (!k) continue;
-      if (!agg.has(k)) agg.set(k, { font: m.font, subs: 0, lines: 0, error: null });
+      if (!agg.has(k)) agg.set(k, { font: m.font, subs: 0, lines: 0, error: null, where: [] });
       const a = agg.get(k);
       a.subs++;
       a.lines += m.lines || 0;
       if (m.error) a.error = m.error;
+      if (a.where.length < MAX_WHERE) {
+        if (info === undefined) info = subInfo(r);
+        if (info) a.where.push(info);
+      }
     }
   }
   res.json({
