@@ -52,6 +52,47 @@ function qualityCell(s) {
   return `<span class="pill ${cls}" title="${s.quality_locked ? 'Nastaveno ručně' : 'Určeno automaticky z release'}">${esc(s.quality)}${lock}</span>`;
 }
 
+// 🔤 tlačítko u titulku: barva = stav vložených fontů, klik = zpracovat znovu
+function fontsButton(src, id, f) {
+  const cls = !f ? '' : f.state === 'ok' ? ' f-ok' : f.state === 'missing' ? ' f-missing' : f.state === 'error' ? ' f-error' : ' f-none';
+  const title = !f ? 'Vložit fonty do titulku (zatím nezpracováno)'
+    : f.state === 'ok' ? `Fonty vložené: ${f.embedded.join(', ')}`
+    : f.state === 'missing' ? `Chybí v knihovně: ${f.missing.join(', ')}${f.embedded.length ? ` · vloženo: ${f.embedded.join(', ')}` : ''}`
+    : f.state === 'none' ? 'Není co vkládat (fonty už v souboru jsou)'
+    : f.state === 'error' ? `Chyba: ${f.note || ''}`
+    : (f.note || f.state);
+  return `<button class="fonts-btn${cls}" data-src="${src}" data-id="${id}" title="${esc(title)} — klik = zpracovat znovu">🔤</button>`;
+}
+function fontsSummary(r) {
+  const parts = [];
+  if (r.embedded?.length) parts.push(`Vloženo: ${r.embedded.join(', ')}`);
+  if (r.missing?.length) parts.push(`Chybí v knihovně: ${r.missing.join(', ')}`);
+  if (r.state === 'none') parts.push('Není co vkládat — fonty už v souboru jsou, nebo titulek žádné nepoužívá.');
+  if (r.state === 'skip') parts.push(`Přeskočeno: ${r.note || 'není .ass'}`);
+  if (r.state === 'error') parts.push(`Chyba: ${r.note || ''}`);
+  return parts.join('\n') || 'Hotovo.';
+}
+async function runFontsBtn(btn) {
+  btn.disabled = true;
+  const old = btn.textContent;
+  btn.textContent = '…';
+  try {
+    const r = await (await fetch(`/api/fonts/process/${btn.dataset.src}/${btn.dataset.id}`, { method: 'POST' })).json();
+    alert(r.error ? 'Fonty: ' + r.error : fontsSummary(r));
+  } catch (err) {
+    alert('Chyba: ' + err.message);
+  }
+  btn.disabled = false;
+  btn.textContent = old;
+  if (btn.dataset.src === 'aki') {
+    const tr = btn.closest('tr.aki-detail');
+    if (tr) loadAkiDetail(Number(tr.dataset.id));
+  } else {
+    loadSubs();
+  }
+  loadFonts();
+}
+
 function statusCell(sub) {
   const label = { downloaded: 'staženo', new: 'čeká', not_downloaded: 'evidováno', pending_extern: 'čeká na parser', failed: 'chyba' }[sub.status] || sub.status;
   const t = sub.error ? ` title="${esc(sub.error)}"` : '';
@@ -94,7 +135,7 @@ function renderSubs(subs) {
       ? `<button class="hanabi-link" data-id="${s.sub_id}" data-ep="${s.episode ?? ''}" title="Vložit odkaz na ZIP z hanabi (img.hanabi.fan)">🔗 odkaz</button>`
       : '';
     const dl = s.status === 'downloaded'
-      ? `<a href="/api/file/${s.sub_id}">stáhnout</a>`
+      ? `<a href="/api/file/${s.sub_id}">stáhnout</a>${s.fonts?.has_file ? ` · <a href="/api/file/${s.sub_id}?fonts=1" title="Verze s vloženými fonty (tu dostává addon)">s fonty</a>` : ''}`
       : (isHanabi
           ? hanabiBtn
           : (s.kind === 'extern' ? `<a href="${esc(s.url)}" target="_blank">otevřít</a>` : ''));
@@ -118,7 +159,7 @@ function renderSubs(subs) {
       <td class="grprel"><div class="g">${esc(s.group_name || '')}</div>${s.release ? `<div class="r">${esc(s.release)}</div>` : ''}</td>
       <td class="srcq"><div>${src}</div><div>${qualityCell(s)}</div></td>
       <td class="stav"><div class="nowrap">${statusCell(s)} ${onR2}</div>${dl ? `<div class="odkaz">${dl}</div>` : ''}</td>
-      <td class="actions"><div class="act">${(s.status === 'downloaded' && s.r2_key) ? `<button class="bd-resync" data-id="${s.sub_id}" data-source="hiyori" title="Přečasovat na BD časování (BD auto)">⏱</button>` : ''}${s.machine ? `<button class="machine-toggle" data-id="${s.sub_id}" title="Zobrazit strojovou verzi (BD auto)">přečas ▸</button>` : ''}${dlNowBtn}${uploadBtn}${canDelete ? `<button class="edit-sub" data-id="${s.sub_id}" data-group="${esc(s.group_name || '')}" data-release="${esc(s.release || '')}" data-lang="${esc(s.lang || '')}" data-quality="${esc(s.quality || '')}" title="Upravit fansub / release / jazyk / kvalitu">✏️</button>` : ''}${(canDelete && s.r2_key) ? `<button class="del-r2" data-id="${s.sub_id}" title="Smazat úplně (DB i soubor na R2)">🗑</button>` : ''}${(canDelete && !s.r2_key) ? `<button class="del-db" data-id="${s.sub_id}" title="Smazat z evidence (jen DB — žádný soubor na R2)">🗑</button>` : ''}${(canDelete && s.status === 'downloaded') ? `<button class="reset-sub" data-id="${s.sub_id}" title="Smazat soubor z R2 a vrátit mezi nestažené (pak jde nahrát správný přes 📤)">♻</button>` : ''}${s.unused_variants ? `<span class="unused-flag" title="Zdroj nabízel i další verzi, která se nepoužila: ${esc(s.unused_variants)} — můžeš ji doplnit ručně přes 📤">⚠️</span>` : ''}</div></td>
+      <td class="actions"><div class="act">${(s.status === 'downloaded' && s.r2_key) ? `<button class="bd-resync" data-id="${s.sub_id}" data-source="hiyori" title="Přečasovat na BD časování (BD auto)">⏱</button>` : ''}${(s.status === 'downloaded' && s.ass) ? fontsButton('hiyori', s.sub_id, s.fonts) : ''}${s.machine ? `<button class="machine-toggle" data-id="${s.sub_id}" title="Zobrazit strojovou verzi (BD auto)">přečas ▸</button>` : ''}${dlNowBtn}${uploadBtn}${canDelete ? `<button class="edit-sub" data-id="${s.sub_id}" data-group="${esc(s.group_name || '')}" data-release="${esc(s.release || '')}" data-lang="${esc(s.lang || '')}" data-quality="${esc(s.quality || '')}" title="Upravit fansub / release / jazyk / kvalitu">✏️</button>` : ''}${(canDelete && s.r2_key) ? `<button class="del-r2" data-id="${s.sub_id}" title="Smazat úplně (DB i soubor na R2)">🗑</button>` : ''}${(canDelete && !s.r2_key) ? `<button class="del-db" data-id="${s.sub_id}" title="Smazat z evidence (jen DB — žádný soubor na R2)">🗑</button>` : ''}${(canDelete && s.status === 'downloaded') ? `<button class="reset-sub" data-id="${s.sub_id}" title="Smazat soubor z R2 a vrátit mezi nestažené (pak jde nahrát správný přes 📤)">♻</button>` : ''}${s.unused_variants ? `<span class="unused-flag" title="Zdroj nabízel i další verzi, která se nepoužila: ${esc(s.unused_variants)} — můžeš ji doplnit ručně přes 📤">⚠️</span>` : ''}</div></td>
     </tr>${s.machine ? `<tr class="machine-row" data-for="${s.sub_id}" hidden><td></td><td colspan="7" class="machine-cell"><span class="pill machine-pill">${esc(s.machine.release || '🤖 BD')}</span>${s.machine.quality ? ` <span class="pill ${s.machine.quality === 'BD' ? 'q-bd' : s.machine.quality === 'DVD' ? 'q-dvd' : 'q-web'}">${esc(s.machine.quality)}</span>` : ''} ${s.machine.version ? esc(s.machine.version) + ' · ' : ''}${((s.machine.file_bytes || 0) / 1024).toFixed(1)} KB · <a href="/api/file/${s.machine.sub_id}">stáhnout</a>${canDelete ? ` · <button class="del-machine" data-id="${s.machine.sub_id}" title="Smazat jen tento přečas (původní titulek zůstane)">🗑 smazat přečas</button>` : ''}</td></tr>` : ''}`;
   }).join('') || `<tr><td colspan="8" class="muted">Nic nenalezeno.</td></tr>`;
 }
@@ -277,7 +318,84 @@ if (addonReqTable) {
   });
 }
 
-function load() { loadOverview(); loadSubs(); loadRequests(); loadAddonRequests(); }
+function load() { loadOverview(); loadSubs(); loadRequests(); loadAddonRequests(); loadFonts(); }
+
+// ── Fonty titulků (knihovna + chybějící fonty) ───────────────────────────────
+async function loadFonts() {
+  try {
+    renderFonts(await (await fetch('/api/fonts/status')).json());
+  } catch { /* ignoruj */ }
+}
+
+function renderFonts(d) {
+  const info = $('#fontsInfo');
+  if (!info) return;
+  const c = d.counts || {};
+  const lib = d.faces
+    ? `knihovna ${d.faces} řezů, ${fmtBytes(d.bytes) || '0 KB'}`
+    : 'knihovna je prázdná — nahraj fonty';
+  const done = [
+    c.ok ? `${c.ok}× vloženo` : '',
+    c.missing ? `${c.missing}× něco chybí` : '',
+    c.none ? `${c.none}× nebylo potřeba` : '',
+    c.error ? `${c.error}× chyba` : '',
+  ].filter(Boolean).join(' · ');
+  info.textContent = `(${lib}${done ? ' · ' + done : ''}${d.r2 ? '' : ' · R2 není nastavené'})`;
+  const retry = $('#fontsRetryBtn');
+  if (retry) {
+    retry.style.display = d.missing_subs ? '' : 'none';
+    retry.textContent = `↻ Zkusit znovu chybějící (${d.missing_subs})`;
+  }
+  const wrap = $('#fontsMissingWrap');
+  const body = $('#fontsMissingTable tbody');
+  if (!wrap || !body) return;
+  if (!d.missing || !d.missing.length) { wrap.style.display = 'none'; return; }
+  wrap.style.display = '';
+  body.innerHTML = d.missing.map((m) =>
+    `<tr><td>${esc(m.font)}${m.error ? ` <span class="muted" title="${esc(m.error)}">⚠</span>` : ''}</td><td>${m.subs}</td><td>${m.lines || '—'}</td></tr>`
+  ).join('');
+}
+
+$('#fontsUploadBtn')?.addEventListener('click', () => $('#fontsFile').click());
+$('#fontsFile')?.addEventListener('change', async (e) => {
+  const files = [...e.target.files];
+  e.target.value = '';
+  if (!files.length) return;
+  const btn = $('#fontsUploadBtn');
+  btn.disabled = true;
+  let added = 0, replaced = 0, skipped = 0;
+  const errors = [];
+  for (const [i, f] of files.entries()) {
+    btn.textContent = files.length > 1 ? `Nahrávám ${i + 1}/${files.length}…` : 'Nahrávám…';
+    try {
+      const r = await (await fetch(`/api/fonts/upload?filename=${encodeURIComponent(f.name)}`, { method: 'POST', body: f })).json();
+      if (r.error) errors.push(`${f.name}: ${r.error}`);
+      else { added += r.added; replaced += r.replaced; skipped += r.skipped; }
+    } catch (err) {
+      errors.push(`${f.name}: ${err.message}`);
+    }
+  }
+  btn.disabled = false;
+  btn.textContent = '⬆ Nahrát fonty';
+  alert(
+    `Fonty: ${added} nových, ${replaced} nahrazených, ${skipped} přeskočeno.` +
+    (errors.length ? `\n\nChyby:\n${errors.join('\n')}` : '') +
+    (added + replaced ? '\n\nTitulky, kterým fonty chyběly, se zkusí znovu při dalším vyžádání (nebo hned přes ↻).' : '')
+  );
+  loadFonts();
+});
+$('#fontsRetryBtn')?.addEventListener('click', async () => {
+  const btn = $('#fontsRetryBtn');
+  btn.disabled = true;
+  try {
+    const r = await (await fetch('/api/fonts/retry-missing', { method: 'POST' })).json();
+    alert(r.error ? 'Fonty: ' + r.error : `Zařazeno ${r.queued} titulků — zpracují se na pozadí.`);
+  } catch (err) {
+    alert('Chyba: ' + err.message);
+  }
+  btn.disabled = false;
+  setTimeout(loadFonts, 4000);
+});
 
 $('#runBtn').addEventListener('click', async () => {
   $('#runBtn').disabled = true;
@@ -878,6 +996,9 @@ function openBdModal(id, source) {
 }
 
 $('#subsTable').addEventListener('click', async (e) => {
+  const fb = e.target.closest('button.fonts-btn');
+  if (fb) { runFontsBtn(fb); return; }
+
   // editace metadat — tužka → modal
   const ed = e.target.closest('button.edit-sub');
   if (ed) { openEditModal(ed); return; }
@@ -1192,8 +1313,9 @@ async function loadAkiDetail(anilistId) {
           const g = s.group ? ` [${esc(s.group)}]` : '';
           const r = s.release ? ` · ${esc(s.release)}` : '';
           const bd = s.id ? ` <button class="bd-resync" data-id="${s.id}" data-source="akihabara" title="Přečasovat na BD (BD auto)">⏱</button>` : '';
+          const fb = (s.id && s.ass) ? ` ${fontsButton('aki', s.id, s.fonts)}` : '';
           const m = s.machine ? ` <a class="machine-dl" href="/api/file/${s.machine.sub_id}" title="${esc(s.machine.release || '🤖 BD')}${s.machine.version ? ' · ' + esc(s.machine.version) : ''}">přečas ⬇</a>` : '';
-          return `${esc(s.lang)}${g}${r}${bd}${m}`;
+          return `${esc(s.lang)}${g}${r}${bd}${fb}${m}`;
         }).join(' · ');
         const epLabel = ep.episode != null ? `Díl ${ep.episode}` : 'Film';
         return `<div class="aki-ep"><b>${esc(epLabel)}:</b> ${variants}</div>`;
@@ -1206,6 +1328,8 @@ async function loadAkiDetail(anilistId) {
 
 // klik na řádek anime → rozbalit/sbalit
 $('#akiTable').addEventListener('click', (e) => {
+  const fb = e.target.closest('button.fonts-btn');
+  if (fb) { runFontsBtn(fb); return; }
   const bulk = e.target.closest('button.aki-bulk-bd');
   if (bulk) { runBulkBd(`/api/akihabara/anime/${bulk.dataset.anilist}/bulk-bd-targets`, 'akihabara'); return; }
   const bd = e.target.closest('button.bd-resync');

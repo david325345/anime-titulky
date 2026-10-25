@@ -375,3 +375,18 @@ button.bulk-upload:disabled { opacity: .4; cursor: default; }
   transition: width .25s ease; }
 .bulk-progress-bar.neurcity > span { width: 35%; animation: bulk-jezdec 1.2s ease-in-out infinite; }
 @keyframes bulk-jezdec { from { transform: translateX(-100%); } to { transform: translateX(290%); } }
+
+/* ── Fonty titulků (vkládání fontů do .ass) ─────────────────────────── */
+.fonts-actions { display: flex; gap: 8px; align-items: center; }
+.fonts-help { margin: 0 0 10px; font-size: 13px; line-height: 1.4; }
+#fontsMissingTable td:nth-child(2), #fontsMissingTable td:nth-child(3) { width: 90px; }
+button.fonts-btn {
+  background: #2c2f3a; border: 1px solid #4a5068; color: #c8cde8;
+  padding: 3px 7px; font-size: 13px; border-radius: 6px; cursor: pointer; margin-right: 4px;
+}
+button.fonts-btn:hover { background: rgba(140,150,220,.16); border-color: #7c86c8; }
+button.fonts-btn:disabled { opacity: .5; cursor: default; }
+button.fonts-btn.f-ok { background: #263a2e; border-color: #4a7c5c; }
+button.fonts-btn.f-missing { background: #3a3222; border-color: #a0782c; }
+button.fonts-btn.f-error { background: #3a2424; border-color: #a03434; }
+button.fonts-btn.f-none { opacity: .7; }

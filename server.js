@@ -14,6 +14,7 @@ import {
   upsertAddonRequest, listAddonRequests, getAddonRequest, setAddonRequestStatus,
   subsByAnime,
   backfillQuality, migrateMachineIds, subSetSiblings, updateSubMetaMany,
+  getSubFonts, fontsBrief, subFontsOverview,
 } from './db.js';
 import { classifyQuality, releaseGroups } from './scraper/quality.js';
 import * as hanabi from './scraper/sources/hanabi.js';
@@ -21,7 +22,9 @@ import { startKeepAlive as startAtKeepAlive } from './scraper/sources/animetitul
 import { saveSubFile } from './scraper/download.js';
 import { bdResync, bdResyncManual, bdCandidates, bdProbe } from './scraper/bdresync.js';
 import AdmZip from 'adm-zip';
-import { r2PublicUrl, r2Get, r2Delete } from './r2.js';
+import { r2PublicUrl, r2Get, r2Delete, r2Enabled } from './r2.js';
+import { loadLibrary, library, readFontFaces, FONT_EXT } from './fonts.js';
+import { ensureFonts, ensureFontsFor, servedFonts, fontsEnabled, isAssKey } from './fontjobs.js';
 import { liveDbGzip, backupDbToR2, startDbBackup, restoreDbFromBuffer } from './backup.js';
 import zlib from 'node:zlib';
 import crypto from 'node:crypto';
@@ -61,7 +64,7 @@ function requireUser1(req, res, next) {
 
 // GET /api/subs?anilist=154587&mal=52991&episode=5[&lang=CZ]
 // Vrací stažené titulky (na R2) — přednost anilist, fallback mal.
-app.get('/api/subs', (req, res) => {
+app.get('/api/subs', async (req, res) => {
   const anilist = Number(req.query.anilist) || null;
   const mal = Number(req.query.mal) || null;
   const episode = req.query.episode != null && req.query.episode !== ''
@@ -74,23 +77,38 @@ app.get('/api/subs', (req, res) => {
   }
 
   const { matchedBy, rows } = findSubs({ anilist, mal, episode, lang });
-  const subs = rows.map((r) => ({
-    sub_id: r.sub_id,
-    lang: r.lang,
-    group: r.group_name,
-    release: r.release,
-    version: r.version,
-    // na jaký zdroj je titulek načasovaný + video skupiny (kanonicky dle indexeru)
-    quality: r.quality || classifyQuality(r.release),
-    release_groups: releaseGroups(r.release),
-    episode: r.episode,
-    kind: r.kind,
-    source: r.extern_domain || 'hiyori',
-    filename: r.filename ? r.filename.replace(/\.gz$/i, '') : null,
-    file_bytes: r.file_bytes,
-    r2_key: r.r2_key,
-    gz_url: r2PublicUrl(r.r2_key), // veřejný odkaz na .gz (addon si rozbalí)
-  }));
+
+  // Fonty: titulky dílu, který si addon právě vyžádal, se při prvním dotazu zpracují
+  // (vloží se chybějící fonty). Čeká se nejvýš FONTS_BUDGET_MS, zbytek doběhne na
+  // pozadí. Dotaz na celé anime bez dílu se zpracuje jen když je titulků málo (film),
+  // jinak se jen vrátí, co už zpracované je.
+  if (episode != null || rows.length <= 6) {
+    try { await ensureFontsFor(rows, CONFIG.fonts.budgetMs); } catch (e) { console.warn('[fonty] /api/subs:', e.message); }
+  }
+  const served = servedFonts(rows);
+
+  const subs = rows.map((r) => {
+    const f = served.get(r);          // verze s vloženými fonty (když je)
+    const key = f ? f.key : r.r2_key;
+    return {
+      sub_id: r.sub_id,
+      lang: r.lang,
+      group: r.group_name,
+      release: r.release,
+      version: r.version,
+      // na jaký zdroj je titulek načasovaný + video skupiny (kanonicky dle indexeru)
+      quality: r.quality || classifyQuality(r.release),
+      release_groups: releaseGroups(r.release),
+      episode: r.episode,
+      kind: r.kind,
+      source: r.extern_domain || 'hiyori',
+      filename: r.filename ? r.filename.replace(/\.gz$/i, '') : null,
+      file_bytes: f ? f.bytes : r.file_bytes,
+      r2_key: key,
+      gz_url: r2PublicUrl(key), // veřejný odkaz na .gz (addon si rozbalí)
+      fonts: !!f,               // true = soubor má vložené fonty ([Fonts])
+    };
+  });
 
   res.json({ matched_by: matchedBy, count: subs.length, subs });
 });
@@ -244,12 +262,15 @@ app.get('/api/recent', (req, res) => {
 // Bez stránkování. Pro zálohu / import do jiného nástroje / přehled.
 app.get('/api/all', (req, res) => {
   const { items, subsTotal } = allSubs();
+  const served = servedFonts();        // verze s vloženými fonty (jen u vyžádaných titulků)
   // dopočítej veřejný R2 odkaz, r2_key ven neposíláme (duplikoval by gz_url)
   for (const a of items) {
     for (const ep of a.episodes) {
       for (const s of ep.subs) {
-        s.gz_url = r2PublicUrl(s.r2_key);
+        const f = served.get(s);
+        s.gz_url = r2PublicUrl(f ? f.key : s.r2_key);
         delete s.r2_key;
+        delete s.src;
       }
     }
   }
@@ -466,6 +487,8 @@ app.get('/api/subs-list', (req, res) => {
     const m = machines[r.sub_id];
     return {
       ...r,
+      fonts: r.status === 'downloaded' ? fontsBrief(getSubFonts('hiyori', r.sub_id), r.r2_key) : null,
+      ass: isAssKey(r.r2_key),
       machine: m
         ? {
             sub_id: m.sub_id,
@@ -519,6 +542,126 @@ app.get('/api/akihabara/detail', (req, res) => {
   const anilist = Number(req.query.anilist) || null;
   if (!anilist) return res.status(400).json({ error: 'Zadej anilist.' });
   res.json(akihabaraAnimeDetail(anilist));
+});
+
+// ==================================================================
+// FONTY TITULKŮ — knihovna fontů + vkládání do .ass (fonts.js, fontjobs.js)
+// ==================================================================
+
+// přehled: knihovna, počty zpracovaných titulků, chybějící fonty (seřazené podle počtu titulků)
+app.get('/api/fonts/status', (req, res) => {
+  const lib = library();
+  const { counts, missingRows } = subFontsOverview();
+  const agg = new Map();
+  for (const r of missingRows) {
+    let list = [];
+    try { list = JSON.parse(r.missing || '[]') || []; } catch {}
+    for (const m of list) {
+      const k = String(m.font || '').toLowerCase();
+      if (!k) continue;
+      if (!agg.has(k)) agg.set(k, { font: m.font, subs: 0, lines: 0, error: null });
+      const a = agg.get(k);
+      a.subs++;
+      a.lines += m.lines || 0;
+      if (m.error) a.error = m.error;
+    }
+  }
+  res.json({
+    enabled: fontsEnabled(),
+    r2: r2Enabled(),
+    dir: lib.dir,
+    faces: lib.faces.length,
+    files: lib.files,
+    bad: lib.bad || 0,
+    bytes: lib.bytes,
+    version: lib.version,
+    loaded_at: lib.loadedAt,
+    counts,
+    missing_subs: missingRows.length,
+    // titulky s chybějícími fonty, které se po změně knihovny ještě nezkusily znovu
+    retry_pending: missingRows.filter((r) => r.lib_version !== lib.version).length,
+    missing: [...agg.values()].sort((a, b) => b.subs - a.subs || b.lines - a.lines),
+  });
+});
+
+// nahrání fontů do knihovny: jeden font (.ttf/.otf/.ttc/.otc) nebo ZIP s fonty
+// (podsložky ZIPu se zachovají). Stejný soubor se nepřepisuje.
+app.post('/api/fonts/upload', express.raw({ type: '*/*', limit: '300mb' }), (req, res) => {
+  const rawName = String(req.query.filename || '').trim();
+  if (!req.body || !req.body.length) return res.status(400).json({ error: 'Prázdný soubor.' });
+  const lib = library();
+  const root = path.resolve(lib.dir);
+  const added = [];
+  const replaced = [];
+  const skipped = [];
+  const save = (rel, buf) => {
+    const parts = String(rel).split(/[\\/]+/)
+      .filter((p) => p && p !== '.' && p !== '..' && !p.startsWith('.'))
+      .map((p) => p.replace(/[<>:"|?*\x00-\x1f]/g, '_'));
+    if (!parts.length || !FONT_EXT.test(parts[parts.length - 1])) { skipped.push(`${rel} (není font)`); return; }
+    try { readFontFaces(buf); } catch (e) { skipped.push(`${rel} (${e.message})`); return; }
+    const dest = path.resolve(root, ...parts);
+    if (!dest.startsWith(root + path.sep)) { skipped.push(`${rel} (cesta)`); return; }
+    const exists = fs.existsSync(dest);
+    if (exists && fs.statSync(dest).size === buf.length && fs.readFileSync(dest).equals(buf)) {
+      skipped.push(`${rel} (už je v knihovně)`);
+      return;
+    }
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.writeFileSync(dest, buf);
+    (exists ? replaced : added).push(parts.join('/'));
+  };
+  try {
+    if (/\.zip$/i.test(rawName)) {
+      const zip = new AdmZip(req.body);
+      for (const e of zip.getEntries()) {
+        if (e.isDirectory || /(^|\/)__MACOSX\//.test(e.entryName) || !FONT_EXT.test(e.entryName)) continue;
+        save(e.entryName, e.getData());
+      }
+    } else if (FONT_EXT.test(rawName)) {
+      save(path.basename(rawName), req.body);
+    } else {
+      return res.status(400).json({ error: 'Povolené: .ttf, .otf, .ttc, .otc nebo .zip s fonty.' });
+    }
+    const before = lib.version;
+    const now = loadLibrary();
+    console.log(`[fonty] nahráno: +${added.length} nových, ${replaced.length} nahrazených, ${skipped.length} přeskočeno → ${now.faces.length} řezů`);
+    res.json({
+      ok: true,
+      added: added.length,
+      replaced: replaced.length,
+      skipped: skipped.length,
+      skipped_list: skipped.slice(0, 30),
+      faces: now.faces.length,
+      files: now.files,
+      changed: before !== now.version,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// titulky, kterým chyběly fonty, zpracovat znovu hned (jinak až při dalším vyžádání)
+app.post('/api/fonts/retry-missing', (req, res) => {
+  if (!fontsEnabled()) return res.status(400).json({ error: 'Knihovna fontů je prázdná nebo chybí R2.' });
+  const { missingRows } = subFontsOverview();
+  for (const r of missingRows) ensureFonts(r.src, r.sub_id, { force: true }).catch(() => {});
+  res.json({ ok: true, queued: missingRows.length });
+});
+
+// 🔤 vložit fonty do jednoho titulku teď (src = hiyori | aki)
+app.post('/api/fonts/process/:src/:id', async (req, res) => {
+  const src = { hiyori: 'hiyori', aki: 'aki', akihabara: 'aki' }[req.params.src];
+  const id = Number(req.params.id);
+  if (!src || !id) return res.status(400).json({ error: 'Špatný titulek.' });
+  if (!fontsEnabled()) return res.status(400).json({ error: 'Knihovna fontů je prázdná nebo chybí R2.' });
+  try {
+    const r = await ensureFonts(src, id, { force: true });
+    if (r.state === 'gone') return res.status(404).json({ error: 'Titulek nemá soubor na R2.' });
+    res.json({ ok: true, ...fontsBrief(r), fonts_bytes: r.fonts_bytes || null });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // smazání záznamu (z DB; soubor na R2 zůstává)
@@ -1063,12 +1206,22 @@ app.get('/api/file/:subId', async (req, res) => {
   const sub = getSub(Number(req.params.subId));
   if (!sub) return res.status(404).send('Titulek nenalezen.');
 
-  const outName = (sub.filename || `sub-${sub.sub_id}.ass`).replace(/\.gz$/i, '');
+  let outName = (sub.filename || `sub-${sub.sub_id}.ass`).replace(/\.gz$/i, '');
+
+  // ?fonts=1 → verze s vloženými fonty (když k aktuálnímu souboru existuje)
+  let key = sub.r2_key;
+  if (req.query.fonts === '1' && sub.r2_key) {
+    const fr = getSubFonts('hiyori', sub.sub_id);
+    if (fr?.fonts_key && fr.r2_key === sub.r2_key) {
+      key = fr.fonts_key;
+      outName = outName.replace(/(\.[^.]+)?$/, (ext) => ` (fonty)${ext}`);
+    }
+  }
 
   // 1) primárně z R2 (.gz) → rozbalit → poslat .ass
-  if (sub.r2_key) {
+  if (key) {
     try {
-      const gz = await r2Get(sub.r2_key);
+      const gz = await r2Get(key);
       if (gz) {
         const ass = zlib.gunzipSync(gz);
         res.setHeader('Content-Type', 'text/plain; charset=utf-8');
@@ -1098,7 +1251,7 @@ app.use((err, req, res, next) => {
   res.status(tooBig ? 413 : err.status || 500).json({
     ok: false,
     error: tooBig
-      ? 'Soubor je příliš velký (limit 50 MB).'
+      ? `Soubor je příliš velký (limit ${req.path.startsWith('/api/fonts') ? '300' : '50'} MB).`
       : (err && err.message) || 'Neočekávaná chyba serveru.',
   });
 });
@@ -1109,6 +1262,15 @@ try {
   const n = migrateMachineIds();
   if (n) console.log(`[machine-ids] přečíslováno ${n} strojových verzí do nového pásma`);
 } catch (e) { console.error('[machine-ids] migrace selhala:', e.message); }
+
+// knihovna fontů pro vkládání do .ass (čte jen nové/změněné soubory, zbytek z .index.json)
+try {
+  const lib = loadLibrary();
+  console.log(
+    `[fonty] knihovna ${lib.dir}: ${lib.faces.length} řezů v ${lib.files} souborech (${Math.round(lib.bytes / 1048576)} MB)` +
+    (lib.faces.length ? '' : ' — vkládání fontů je vypnuté, dokud v dashboardu nenahraješ fonty')
+  );
+} catch (e) { console.error('[fonty] knihovna:', e.message); }
 
 app.listen(CONFIG.port, () => {
   console.log(`NimeToDex Titulky běží na portu ${CONFIG.port}`);

@@ -120,6 +120,15 @@ export const CONFIG = {
     proxy: (process.env.AGENT_PROXY || '').trim(),
   },
 
+  // Fonty vkládané do .ass titulků (Nuvio na Apple TV fansub fonty nemá).
+  // dir = knihovna fontů (.ttf/.otf/.ttc, i v podsložkách) — leží na persistent volume.
+  // budgetMs = kolik ms smí addon při prvním vyžádání titulku čekat na vložení fontů;
+  // když to trvá déle, dostane zatím původní soubor a fonty se dodělají na pozadí.
+  fonts: {
+    dir: process.env.FONTS_DIR || path.join(process.env.DATA_DIR || path.resolve('./data'), 'fonts'),
+    budgetMs: Number(process.env.FONTS_BUDGET_MS || 3000),
+  },
+
   // wosir.cz — vyžaduje vlastní účet (přihlášení e-mailem).
   wosir: {
     email: process.env.WOSIR_EMAIL || '',

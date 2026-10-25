@@ -172,6 +172,113 @@ ensureColumn('bd_pref', 'infohash', 'TEXT');
 ensureColumn('bd_pref', 'pinned', 'INTEGER DEFAULT 0');
 ensureColumn('bd_pref', 'label', 'TEXT');
 
+// ── Verze titulků s vloženými fonty (fontjobs.js) ────────────────────────────
+// Jeden řádek = jeden titulek, src = 'hiyori' (tahle DB) | 'aki' (archiv akihabara.db,
+// ID prostory se můžou krýt). r2_key = ze kterého souboru verze vznikla — když se
+// soubor titulku změní, výsledek přestane platit. fonts_key = verze s fonty na R2
+// (originál zůstává). state: ok | missing (něco chybí i v knihovně) | none (není co
+// vkládat) | skip (není .ass) | error. lib_version = verze knihovny při zpracování
+// (u 'missing' se po přidání fontů zkusí znovu).
+db.exec(`CREATE TABLE IF NOT EXISTS sub_fonts (
+  src         TEXT NOT NULL,
+  sub_id      INTEGER NOT NULL,
+  r2_key      TEXT,
+  fonts_key   TEXT,
+  fonts_bytes INTEGER,
+  state       TEXT,
+  embedded    TEXT,
+  missing     TEXT,
+  note        TEXT,
+  lib_version TEXT,
+  at          TEXT,
+  PRIMARY KEY (src, sub_id)
+)`);
+db.exec('CREATE INDEX IF NOT EXISTS idx_sub_fonts_state ON sub_fonts(state)');
+
+const _getSubFonts = db.prepare('SELECT * FROM sub_fonts WHERE src=? AND sub_id=?');
+const _setSubFonts = db.prepare(`
+  INSERT INTO sub_fonts (src, sub_id, r2_key, fonts_key, fonts_bytes, state, embedded, missing, note, lib_version, at)
+  VALUES (@src, @sub_id, @r2_key, @fonts_key, @fonts_bytes, @state, @embedded, @missing, @note, @lib_version, @at)
+  ON CONFLICT(src, sub_id) DO UPDATE SET
+    r2_key=excluded.r2_key, fonts_key=excluded.fonts_key, fonts_bytes=excluded.fonts_bytes,
+    state=excluded.state, embedded=excluded.embedded, missing=excluded.missing,
+    note=excluded.note, lib_version=excluded.lib_version, at=excluded.at
+`);
+const _delSubFonts = db.prepare('DELETE FROM sub_fonts WHERE src=? AND sub_id=?');
+export const getSubFonts = (src, subId) => _getSubFonts.get(src, Number(subId)) || null;
+export const setSubFonts = (row) => _setSubFonts.run({
+  fonts_key: null, fonts_bytes: null, embedded: null, missing: null, note: null, lib_version: null, ...row,
+});
+// smaže evidenci a vrátí původní řádek (volající smaže verzi s fonty z R2)
+export function dropSubFonts(src, subId) {
+  const old = getSubFonts(src, subId);
+  if (old) _delSubFonts.run(src, Number(subId));
+  return old;
+}
+// Verze s fonty pro víc titulků najednou → Map 'src:id' → řádek (jen ty s fonts_key).
+// Bez argumentu vrátí všechny (pro /api/all — tabulka je malá, jen vyžádané titulky).
+export function subFontsServed(items = null) {
+  const map = new Map();
+  if (!items) {
+    for (const r of db.prepare('SELECT * FROM sub_fonts WHERE fonts_key IS NOT NULL').all()) map.set(`${r.src}:${r.sub_id}`, r);
+    return map;
+  }
+  for (const [src, ids] of groupIds(items)) {
+    for (let i = 0; i < ids.length; i += 500) {
+      const part = ids.slice(i, i + 500);
+      const rows = db
+        .prepare(`SELECT * FROM sub_fonts WHERE src=? AND sub_id IN (${part.map(() => '?').join(',')})`)
+        .all(src, ...part);
+      for (const r of rows) map.set(`${r.src}:${r.sub_id}`, r);
+    }
+  }
+  return map;
+}
+function groupIds(items) {
+  const g = new Map();
+  for (const it of items) {
+    if (!g.has(it.src)) g.set(it.src, []);
+    g.get(it.src).push(Number(it.sub_id));
+  }
+  return g;
+}
+// stručný stav pro dashboard (jen když patří k aktuálnímu souboru titulku)
+export function fontsBrief(fr, r2Key = null) {
+  if (!fr || (r2Key && fr.r2_key !== r2Key)) return null;
+  const names = (json, pick) => {
+    try { return [...new Set((JSON.parse(json || '[]') || []).map(pick))]; } catch { return []; }
+  };
+  return {
+    state: fr.state,
+    embedded: names(fr.embedded, (e) => e.font),
+    missing: names(fr.missing, (m) => m.font),
+    note: fr.note || null,
+    at: fr.at,
+    has_file: !!fr.fonts_key,
+  };
+}
+
+// přehled pro dashboard: počty podle stavu + titulky s chybějícími fonty
+export function subFontsOverview() {
+  const counts = Object.fromEntries(
+    db.prepare('SELECT state, COUNT(*) AS c FROM sub_fonts GROUP BY state').all().map((r) => [r.state, r.c])
+  );
+  const missingRows = db
+    .prepare("SELECT src, sub_id, r2_key, missing, lib_version FROM sub_fonts WHERE state='missing'")
+    .all();
+  return { counts, missingRows };
+}
+
+// Háčky pro fontjobs.js (registruje se sám — db.js ho kvůli cyklu neimportuje):
+// saved = titulek se uložil / změnil → vložit fonty; dropped = soubor zmizel.
+const fontHooks = { saved: null, dropped: null };
+export function setFontHooks({ saved = null, dropped = null } = {}) {
+  fontHooks.saved = saved;
+  fontHooks.dropped = dropped;
+}
+const fontsSaved = (subId) => { try { fontHooks.saved?.('hiyori', subId); } catch (e) { console.warn('[fonty]', e.message); } };
+const fontsDropped = (subId) => { try { fontHooks.dropped?.('hiyori', subId); } catch (e) { console.warn('[fonty]', e.message); } };
+
 // Požadavky na přidání anime z hiyori extension (POST /api/request-anime).
 db.exec(`CREATE TABLE IF NOT EXISTS requests (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -404,7 +511,7 @@ const _markFailed = db.prepare(
 // po úspěšném zápisu dá vědět addonu (notify.js — sdružuje, v dávce posílá až na konci)
 export const markDownloaded = (row) => {
   const r = _markDownloaded.run({ downloaded_at: new Date().toISOString(), unused_variants: null, ...row });
-  if (r.changes) { notifySubsChanged(); resolveAddonRequests(getSub(row.sub_id)); }
+  if (r.changes) { notifySubsChanged(); resolveAddonRequests(getSub(row.sub_id)); fontsSaved(row.sub_id); }
   return r;
 };
 export const markFailed = (sub_id, error) =>
@@ -655,7 +762,7 @@ export function resetSubDownload(sub_id, status) {
         WHERE sub_id = @sub_id`
     )
     .run({ sub_id, status }).changes;
-  if (n) notifySubsChanged();          // titulek zmizí z „Dnes přidaných"
+  if (n) { notifySubsChanged(); fontsDropped(sub_id); } // titulek zmizí z „Dnes přidaných"
   return n;
 }
 
@@ -759,7 +866,7 @@ export function saveMachineSub(row) {
     // kvalita přečasu z jeho release („🤖 BD · EMBER" → BD, skupina EMBER)
     quality: row.quality ?? classifyQuality(row.release),
   });
-  if (r.changes) { notifySubsChanged(); resolveAddonRequests(row); }
+  if (r.changes) { notifySubsChanged(); resolveAddonRequests(row); fontsSaved(row.sub_id); }
   return r;
 }
 
@@ -800,7 +907,7 @@ setIncompleteCheck((key) => {
 const _deleteSub = db.prepare('DELETE FROM subs WHERE sub_id=?');
 export const deleteSub = (sub_id) => {
   const n = _deleteSub.run(sub_id).changes;
-  if (n) notifySubsChanged();          // smazaný titulek zmizí z „Dnes přidaných"
+  if (n) { notifySubsChanged(); fontsDropped(sub_id); } // smazaný titulek zmizí z „Dnes přidaných"
   return n;
 };
 
@@ -836,7 +943,7 @@ function findAkiSubs({ anilist = null, mal = null, episode = null, lang = null }
   const langCond = lang ? ' AND UPPER(lang)=UPPER(@lang)' : '';
   const epCond = episode != null ? ' AND episode=@episode' : '';
   const base =
-    "SELECT akihabara_id AS sub_id, anilist_id, mal_id, anime_title, episode, lang, " +
+    "SELECT 'aki' AS src, akihabara_id AS sub_id, anilist_id, mal_id, anime_title, episode, lang, " +
     "group_name, release, version, NULL AS quality, NULL AS kind, " +
     "COALESCE(extern_domain,'akihabara') AS extern_domain, filename, file_bytes, r2_key " +
     "FROM subs WHERE r2_key IS NOT NULL AND r2_key<>''";
@@ -863,7 +970,7 @@ export function findSubs({ anilist = null, mal = null, episode = null, lang = nu
   const langCond = lang ? ' AND UPPER(lang)=UPPER(@lang)' : '';
   const epCond = episode != null ? ' AND episode=@episode' : '';
   const base =
-    "SELECT sub_id, anilist_id, mal_id, anime_title, episode, lang, group_name, " +
+    "SELECT 'hiyori' AS src, sub_id, anilist_id, mal_id, anime_title, episode, lang, group_name, " +
     "release, version, quality, kind, extern_domain, filename, file_bytes, r2_key " +
     "FROM subs WHERE status='downloaded' AND r2_key IS NOT NULL AND r2_key<>''";
 
@@ -890,7 +997,7 @@ export function findSubs({ anilist = null, mal = null, episode = null, lang = nu
 export function allSubs() {
   const rows = db
     .prepare(
-      "SELECT sub_id, hiyori_id, anilist_id, mal_id, anime_title, episode, lang, " +
+      "SELECT 'hiyori' AS src, sub_id, hiyori_id, anilist_id, mal_id, anime_title, episode, lang, " +
       "group_name, release, version, kind, extern_domain, r2_key " +
       "FROM subs WHERE status='downloaded' AND r2_key IS NOT NULL AND r2_key<>'' " +
       "ORDER BY anime_title, episode, lang, group_name"
@@ -904,7 +1011,7 @@ export function allSubs() {
     try {
       akiRows = akiDb
         .prepare(
-          "SELECT akihabara_id AS sub_id, NULL AS hiyori_id, anilist_id, mal_id, anime_title, " +
+          "SELECT 'aki' AS src, akihabara_id AS sub_id, NULL AS hiyori_id, anilist_id, mal_id, anime_title, " +
           "episode, lang, group_name, release, version, NULL AS kind, " +
           "COALESCE(extern_domain,'akihabara') AS extern_domain, r2_key " +
           "FROM subs WHERE r2_key IS NOT NULL AND r2_key<>'' " +
@@ -942,6 +1049,7 @@ export function allSubs() {
       release: subRelease(r),
       version: r.version,
       source: r.extern_domain || 'hiyori',
+      src: r.src,       // hiyori | aki — server podle něj najde verzi s fonty
       r2_key: r.r2_key, // server z něj udělá gz_url
     });
   };
@@ -1165,6 +1273,8 @@ export function akihabaraAnimeDetail(anilistId) {
         lang: r.lang,
         group: r.group_name,
         release: r.release,
+        ass: /\.(ass|ssa)(\.gz)?$/i.test(r.r2_key || ''),
+        fonts: fontsBrief(getSubFonts('aki', r.akihabara_id), r.r2_key),
         machine: m
           ? { sub_id: m.sub_id, release: m.release, version: m.version, file_bytes: m.file_bytes }
           : null,

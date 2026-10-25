@@ -73,6 +73,24 @@
       </table>
     </section>
 
+    <section class="panel" id="fontsPanel">
+      <div class="panel-head">
+        <h2>Fonty titulků <span id="fontsInfo" class="muted"></span></h2>
+        <div class="fonts-actions">
+          <button id="fontsRetryBtn" class="btn-secondary" style="display:none" title="Znovu zpracovat titulky, kterým chyběly fonty (jinak se to stane samo při dalším vyžádání)">↻ Zkusit znovu chybějící</button>
+          <button id="fontsUploadBtn" title="Nahrát fonty do knihovny — .ttf / .otf / .ttc nebo ZIP s fonty">⬆ Nahrát fonty</button>
+          <input id="fontsFile" type="file" accept=".ttf,.otf,.ttc,.otc,.zip" multiple hidden />
+        </div>
+      </div>
+      <p class="muted fonts-help">Do .ass titulků se vkládají fonty z knihovny (Nuvio na Apple TV fansub fonty nemá). Nové titulky automaticky po uložení, starší až když si je addon vyžádá, nebo ručně tlačítkem 🔤 u titulku.</p>
+      <div id="fontsMissingWrap" class="table-wrap" style="display:none">
+        <table id="fontsMissingTable">
+          <thead><tr><th>Chybějící font</th><th>Titulků</th><th>Řádků</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
     <section class="panel">
       <div class="panel-head">
         <h2>Titulky</h2>
