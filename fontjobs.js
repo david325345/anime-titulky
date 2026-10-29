@@ -18,7 +18,7 @@
 
 import crypto from 'node:crypto';
 import zlib from 'node:zlib';
-import { r2Enabled, r2Get, r2Put, r2Delete } from './r2.js';
+import { r2Enabled, r2Get, r2Put, r2Delete, gunzipMaybe } from './r2.js';
 import {
   getSub, getAkiSub, getSubFonts, setSubFonts, dropSubFonts, setFontHooks, subFontsServed,
 } from './db.js';
@@ -99,7 +99,7 @@ async function processSub(src, id, force) {
   try {
     const gz = await r2Get(key);
     if (!gz) throw new Error('soubor na R2 chybí');
-    const r = await embedFonts(zlib.gunzipSync(gz));
+    const r = await embedFonts(gunzipMaybe(gz, key));
     let fontsKey = null;
     let fontsBytes = null;
     if (r.out) {

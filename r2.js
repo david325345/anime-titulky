@@ -1,7 +1,18 @@
 // r2.js — upload titulků na Cloudflare R2 (S3-kompatibilní API) přes aws4fetch.
 // Když nejsou nastavené R2 klíče, upload se přeskočí (služba jede jen lokálně).
+import zlib from 'node:zlib';
 import { AwsClient } from 'aws4fetch';
 import { CONFIG } from './config.js';
+
+// Titulky na R2 mají být gzip (klíč končí .gz). Několik starších ručních importů ale
+// nahrálo soubory nezabalené — poznají se podle prvních bajtů (gzip začíná 1f 8b).
+// Takový soubor se vezme, jak je, a do logu jde varování (opraví tools/oprav-gzip-archiv.mjs).
+export const isGzip = (buf) => !!buf && buf.length >= 2 && buf[0] === 0x1f && buf[1] === 0x8b;
+export function gunzipMaybe(buf, key = '') {
+  if (isGzip(buf)) return zlib.gunzipSync(buf);
+  console.warn(`[r2] ${key || 'soubor'} není gzip, i když by měl být — beru ho nezabalený`);
+  return buf;
+}
 
 let client = null;
 function getClient() {

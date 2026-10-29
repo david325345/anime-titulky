@@ -22,7 +22,7 @@ import { startKeepAlive as startAtKeepAlive } from './scraper/sources/animetitul
 import { saveSubFile } from './scraper/download.js';
 import { bdResync, bdResyncManual, bdCandidates, bdProbe } from './scraper/bdresync.js';
 import AdmZip from 'adm-zip';
-import { r2PublicUrl, r2Get, r2Delete, r2Enabled } from './r2.js';
+import { r2PublicUrl, r2Get, r2Delete, r2Enabled, gunzipMaybe } from './r2.js';
 import { loadLibrary, library, readFontFaces, FONT_EXT } from './fonts.js';
 import { ensureFonts, ensureFontsFor, servedFonts, fontsEnabled, isAssKey } from './fontjobs.js';
 import { liveDbGzip, backupDbToR2, startDbBackup, restoreDbFromBuffer } from './backup.js';
@@ -1242,7 +1242,7 @@ app.get('/api/file/:subId', async (req, res) => {
     try {
       const gz = await r2Get(key);
       if (gz) {
-        const ass = zlib.gunzipSync(gz);
+        const ass = gunzipMaybe(gz, key);
         res.setHeader('Content-Type', 'text/plain; charset=utf-8');
         res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(outName)}"`);
         return res.send(ass);
