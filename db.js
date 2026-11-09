@@ -1293,6 +1293,23 @@ export function akihabaraAnimeDetail(anilistId) {
 
 // Jeden archivní titulek podle akihabara_id (pro přečas z archivu). Vrací i
 // anidb_id (z importu) — když je, přečas přeskočí indexer.
+// Originály všech titulků jednoho anime v archivu (pro ZIP ke stažení z dashboardu).
+export function akihabaraFilesFor(anilistId) {
+  if (!akiDb) return [];
+  try {
+    return akiDb
+      .prepare(
+        'SELECT akihabara_id, anime_title, episode, lang, group_name, filename, r2_key ' +
+        "FROM subs WHERE anilist_id=? AND r2_key IS NOT NULL AND r2_key<>'' " +
+        'ORDER BY episode, lang, group_name, akihabara_id'
+      )
+      .all(Number(anilistId));
+  } catch (e) {
+    console.error('[akihabara] akihabaraFilesFor chyba:', e.message);
+    return [];
+  }
+}
+
 export function getAkiSub(akihabaraId) {
   if (!akiDb) return null;
   try {

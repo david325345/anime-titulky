@@ -1320,16 +1320,18 @@ async function loadAkiDetail(anilistId) {
       return;
     }
     cell.innerHTML =
-      `<div class="aki-bulk-bar"><button class="aki-bulk-bd" data-anilist="${anilistId}">⏱ Přečasovat vše (auto)</button></div>` +
+      `<div class="aki-bulk-bar"><button class="aki-bulk-bd" data-anilist="${anilistId}">⏱ Přečasovat vše (auto)</button>` +
+      ` <button class="aki-zip" data-anilist="${anilistId}" title="Všechny originální titulky tohoto anime v jednom ZIPu">📦 Stáhnout vše (ZIP)</button></div>` +
       '<div class="aki-eps">' +
       d.episodes.map((ep) => {
         const variants = ep.subs.map((s) => {
           const g = s.group ? ` [${esc(s.group)}]` : '';
           const r = s.release ? ` · ${esc(s.release)}` : '';
+          const dl = s.id ? ` <a class="aki-dl" href="/api/akihabara/file/${s.id}" title="Stáhnout originál">⬇</a>` : '';
           const bd = s.id ? ` <button class="bd-resync" data-id="${s.id}" data-source="akihabara" title="Přečasovat na BD (BD auto)">⏱</button>` : '';
           const fb = (s.id && s.ass) ? ` ${fontsButton('aki', s.id, s.fonts)}` : '';
           const m = s.machine ? ` <a class="machine-dl" href="/api/file/${s.machine.sub_id}" title="${esc(s.machine.release || '🤖 BD')}${s.machine.version ? ' · ' + esc(s.machine.version) : ''}">přečas ⬇</a>` : '';
-          return `${esc(s.lang)}${g}${r}${bd}${fb}${m}`;
+          return `${esc(s.lang)}${g}${r}${dl}${bd}${fb}${m}`;
         }).join(' · ');
         const epLabel = ep.episode != null ? `Díl ${ep.episode}` : 'Film';
         return `<div class="aki-ep"><b>${esc(epLabel)}:</b> ${variants}</div>`;
@@ -1340,12 +1342,45 @@ async function loadAkiDetail(anilistId) {
   }
 }
 
+// ZIP všech originálů anime — server ho skládá z R2 i desítky sekund, proto přes fetch
+// (tlačítko ukazuje, že se pracuje) a pak se stáhne jako soubor.
+async function downloadAkiZip(btn) {
+  if (btn.disabled) return;
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '⏳ Připravuji ZIP…';
+  try {
+    const res = await fetch(`/api/akihabara/zip?anilist=${btn.dataset.anilist}`);
+    if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`);
+    // název bez diakritiky (ASCII záloha od serveru) — s diakritikou by ho některé
+    // prohlížeče u staženého blobu zahodily a soubor by se jmenoval „download“
+    const cd = res.headers.get('Content-Disposition') || '';
+    const m = cd.match(/filename="([^"]+)"/i);
+    const name = m ? m[1] : `anilist-${btn.dataset.anilist}.zip`;
+    const url = URL.createObjectURL(await res.blob());
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  } catch (err) {
+    alert(`ZIP se nepodařilo připravit: ${err.message}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+}
+
 // klik na řádek anime → rozbalit/sbalit
 $('#akiTable').addEventListener('click', (e) => {
   const fb = e.target.closest('button.fonts-btn');
   if (fb) { runFontsBtn(fb); return; }
   const bulk = e.target.closest('button.aki-bulk-bd');
   if (bulk) { runBulkBd(`/api/akihabara/anime/${bulk.dataset.anilist}/bulk-bd-targets`, 'akihabara'); return; }
+  const zipBtn = e.target.closest('button.aki-zip');
+  if (zipBtn) { downloadAkiZip(zipBtn); return; }
   const bd = e.target.closest('button.bd-resync');
   if (bd) { openBdModal(bd.dataset.id, 'akihabara'); return; }
   const row = e.target.closest('tr.aki-anime');

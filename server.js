@@ -14,7 +14,7 @@ import {
   upsertAddonRequest, listAddonRequests, getAddonRequest, setAddonRequestStatus,
   subsByAnime,
   backfillQuality, migrateMachineIds, subSetSiblings, updateSubMetaMany,
-  getSubFonts, fontsBrief, subFontsOverview,
+  getSubFonts, fontsBrief, subFontsOverview, akihabaraFilesFor,
 } from './db.js';
 import { classifyQuality, releaseGroups } from './scraper/quality.js';
 import * as hanabi from './scraper/sources/hanabi.js';
@@ -542,6 +542,90 @@ app.get('/api/akihabara/detail', (req, res) => {
   const anilist = Number(req.query.anilist) || null;
   if (!anilist) return res.status(400).json({ error: 'Zadej anilist.' });
   res.json(akihabaraAnimeDetail(anilist));
+});
+
+// ── stažení originálů z archivu (jednotlivě / celé anime jako ZIP) ─────────────
+// název souboru: uložený filename, jinak z R2 klíče (…/123__nazev.ass.gz)
+function akiFileName(s) {
+  const base = String(s.filename || '').split(/[\\/]/).pop()
+    || String(s.r2_key || '').split('/').pop().replace(/^\d+__/, '')
+    || `aki-${s.akihabara_id}.ass`;
+  return base.replace(/\.gz$/i, '').replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').trim() || `aki-${s.akihabara_id}.ass`;
+}
+// „název [doplněk].ass“
+const withSuffix = (name, suffix) => name.replace(/(\.[^.]+)?$/, (ext) => `${suffix}${ext}`);
+// Content-Disposition s diakritikou: ASCII záloha (bez háčků a čárek) + plný UTF-8 název
+const asciiName = (name) =>
+  name.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^\x20-\x7e]/g, '_').replace(/"/g, '');
+const attachmentHeader = (name) =>
+  `attachment; filename="${asciiName(name)}"; filename*=UTF-8''${encodeURIComponent(name)}`;
+
+// jeden originál: /api/akihabara/file/123
+app.get('/api/akihabara/file/:akiId', async (req, res) => {
+  const s = getAkiSub(req.params.akiId);
+  if (!s || !s.r2_key) return res.status(404).send('Titulek v archivu nenalezen.');
+  try {
+    const gz = await r2Get(s.r2_key);
+    if (!gz) return res.status(404).send('Soubor na R2 chybí.');
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Disposition', attachmentHeader(akiFileName(s)));
+    return res.send(gunzipMaybe(gz, s.r2_key));
+  } catch (e) {
+    console.error(`[akihabara] stažení ${s.akihabara_id}:`, e.message);
+    return res.status(500).send(`Stažení selhalo: ${e.message}`);
+  }
+});
+
+// všechny originály jednoho anime jako ZIP: /api/akihabara/zip?anilist=6702
+app.get('/api/akihabara/zip', async (req, res) => {
+  const anilist = Number(req.query.anilist) || null;
+  if (!anilist) return res.status(400).send('Zadej anilist.');
+  const rows = akihabaraFilesFor(anilist);
+  if (!rows.length) return res.status(404).send('V archivu k tomuhle anime nic není.');
+
+  // z R2 po 6 souborech naráz
+  const files = new Array(rows.length).fill(null);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(6, rows.length) }, async () => {
+    while (next < rows.length) {
+      const i = next++;
+      try {
+        const gz = await r2Get(rows[i].r2_key);
+        if (gz) files[i] = gunzipMaybe(gz, rows[i].r2_key);
+      } catch (e) {
+        console.warn(`[akihabara] ZIP ${rows[i].akihabara_id}:`, e.message);
+      }
+    }
+  }));
+
+  const zip = new AdmZip();
+  const used = new Set();
+  const missing = [];
+  rows.forEach((r, i) => {
+    let name = akiFileName(r);
+    if (!files[i]) {
+      missing.push(`${r.episode != null ? `díl ${r.episode}` : 'film'} · ${r.lang || '?'} · ${r.group_name || '?'} · ${name}`);
+      return;
+    }
+    // stejný název u dvou titulků → druhý dostane skupinu/jazyk, případně ID
+    if (used.has(name.toLowerCase())) name = withSuffix(name, ` [${[r.group_name, r.lang].filter(Boolean).join(' ') || r.akihabara_id}]`);
+    if (used.has(name.toLowerCase())) name = withSuffix(name, ` (${r.akihabara_id})`);
+    used.add(name.toLowerCase());
+    zip.addFile(name, files[i]);
+  });
+  if (used.size === 0) return res.status(502).send('Z R2 se nepodařilo stáhnout žádný soubor.');
+  if (missing.length) {
+    zip.addFile('_chybi.txt', Buffer.from(
+      `Tyto titulky se nepodařilo stáhnout z R2:\r\n${missing.join('\r\n')}\r\n`, 'utf8'));
+  }
+
+  const title = String(rows[0].anime_title || `anilist-${anilist}`)
+    .replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').trim() || `anilist-${anilist}`;
+  const buf = zip.toBuffer();
+  console.log(`[akihabara] ZIP AL${anilist}: ${used.size} souborů${missing.length ? `, ${missing.length} chybí` : ''}, ${Math.round(buf.length / 1024)} kB`);
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Disposition', attachmentHeader(`${title}.zip`));
+  return res.send(buf);
 });
 
 // ==================================================================
