@@ -8,12 +8,21 @@
 // Stránky anime jsou veřejné (cookie se posílá, ale nevyžaduje).
 // /stahnout/<id>/ bez přihlášení → 302 na /prihlaseni/?…at_notice=error → AuthExpired.
 
-import { CONFIG } from '../../config.js';
 import { hostGate } from '../ratelimit.js';
 import { AuthExpired } from '../http.js';
 
 const BASE = 'https://animetitulky.com';
 const DOMAIN = 'animetitulky.com';
+
+// Vlastní poctivý User-Agent. Ochrana webu (WEDOS) blokuje HTTP 455 požadavky,
+// které se vydávají za Chrome (CONFIG.userAgent), ale otisk spojení mají od Node.
+// Přihlašovací WordPress cookie na User-Agentu nezávisí. Přepis: env ANIMETITULKY_UA.
+const UA = (process.env.ANIMETITULKY_UA || '').trim() || 'NimeToDex-Titulky/1.0';
+
+// 455/456 = zablokováno ochranou webu (WAF), ne odhlášení.
+const isWaf = (status) => status === 455 || status === 456;
+const wafMsg = (status, u) =>
+  `animetitulky: zablokováno ochranou webu (WAF, HTTP ${status}) — nejde o cookie; zkus jiný ANIMETITULKY_UA (${u})`;
 
 function cookie() {
   return (process.env.ANIMETITULKY_COOKIE || '').trim();
@@ -22,7 +31,7 @@ function cookie() {
 function headers(extra = {}) {
   const c = cookie();
   const h = {
-    'User-Agent': CONFIG.userAgent,
+    'User-Agent': UA,
     'Accept-Language': 'cs,sk;q=0.9,en;q=0.8',
     ...extra,
   };
@@ -42,6 +51,7 @@ export async function getHtml(url) {
   const res = await fetch(u, { headers: headers(), redirect: 'follow' });
   if (!res.ok) {
     await res.arrayBuffer().catch(() => {});
+    if (isWaf(res.status)) throw new Error(wafMsg(res.status, u));
     throw new Error(`animetitulky: stránka vrátila HTTP ${res.status} (${u})`);
   }
   return res.text();
@@ -71,6 +81,7 @@ export async function getBinary(url, { referer } = {}) {
   }
   if (!res.ok) {
     await res.arrayBuffer().catch(() => {});
+    if (isWaf(res.status)) throw new Error(wafMsg(res.status, u));
     throw new Error(`animetitulky: stažení vrátilo HTTP ${res.status} (${u})`);
   }
   const ct = (res.headers.get('content-type') || '').toLowerCase();
@@ -125,7 +136,10 @@ export function startKeepAlive({ log = console.log } = {}) {
     let nextMs = KEEPALIVE_HOURS * 3600000;
     try {
       const r = await keepAlive();
-      if (!r.loggedIn) {
+      if (isWaf(r.status)) {
+        nextMs = RETRY_MIN * 60000;
+        log(`[animetitulky] ⛔ kontrola přihlášení zablokována ochranou webu (WAF, HTTP ${r.status}) — cookie může být v pořádku; zkus jiný ANIMETITULKY_UA. Znovu za ${RETRY_MIN} min.`);
+      } else if (!r.loggedIn) {
         log(`[animetitulky] 🔒 ODHLÁŠENO (HTTP ${r.status}) — obnov ANIMETITULKY_COOKIE (C:\\at → node at-cookie.mjs).`);
       } else if (r.expires) {
         const days = (r.expires - Date.now()) / 86400000;
