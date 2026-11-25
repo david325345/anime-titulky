@@ -52,38 +52,45 @@
     <section class="panel" id="requestsPanel" style="display:none">
       <div class="panel-head">
         <h2>Požadavky na přidání <span id="reqCount" class="muted"></span></h2>
+        <button class="collapse-btn btn-secondary" data-panel="requestsPanel"></button>
       </div>
-      <table id="requestsTable">
-        <thead>
-          <tr><th>Anime</th><th>hiyori</th><th>anilist</th><th>datum</th><th></th></tr>
-        </thead>
-        <tbody id="requestsBody"></tbody>
-      </table>
+      <div class="table-wrap collapsible">
+        <table id="requestsTable">
+          <thead>
+            <tr><th>Anime</th><th>hiyori</th><th>anilist</th><th>datum</th><th></th></tr>
+          </thead>
+          <tbody id="requestsBody"></tbody>
+        </table>
+      </div>
     </section>
 
     <section class="panel" id="addonReqPanel" style="display:none">
       <div class="panel-head">
         <h2>Žádosti z addonu <span id="addonReqCount" class="muted"></span></h2>
+        <button class="collapse-btn btn-secondary" data-panel="addonReqPanel"></button>
       </div>
-      <table id="addonReqTable">
-        <thead>
-          <tr><th>Anime</th><th>Díl</th><th>Žadatelů</th><th>Stav</th><th>Odkazy</th><th>Poslední žádost</th><th></th></tr>
-        </thead>
-        <tbody id="addonReqBody"></tbody>
-      </table>
+      <div class="table-wrap collapsible">
+        <table id="addonReqTable">
+          <thead>
+            <tr><th>Anime</th><th>Díl</th><th>Žadatelů</th><th>Stav</th><th>Odkazy</th><th>Poslední žádost</th><th></th></tr>
+          </thead>
+          <tbody id="addonReqBody"></tbody>
+        </table>
+      </div>
     </section>
 
     <section class="panel" id="fontsPanel">
       <div class="panel-head">
         <h2>Fonty titulků <span id="fontsInfo" class="muted"></span></h2>
         <div class="fonts-actions">
+          <button id="fontsMissingToggle" class="collapse-btn btn-secondary" data-panel="fontsPanel" style="display:none"></button>
           <button id="fontsRetryBtn" class="btn-secondary" style="display:none" title="Znovu zpracovat titulky, kterým chyběly fonty (jinak se to stane samo při dalším vyžádání)">↻ Zkusit znovu chybějící</button>
           <button id="fontsUploadBtn" title="Nahrát fonty do knihovny — .ttf / .otf / .ttc nebo ZIP s fonty">⬆ Nahrát fonty</button>
           <input id="fontsFile" type="file" accept=".ttf,.otf,.ttc,.otc,.zip" multiple hidden />
         </div>
       </div>
       <p class="muted fonts-help">Do .ass titulků se vkládají fonty z knihovny (Nuvio na Apple TV fansub fonty nemá). Nové titulky automaticky po uložení, starší až když si je addon vyžádá, nebo ručně tlačítkem 🔤 u titulku.</p>
-      <div id="fontsMissingWrap" class="table-wrap" style="display:none">
+      <div id="fontsMissingWrap" class="table-wrap collapsible" style="display:none">
         <table id="fontsMissingTable">
           <thead><tr><th>Chybějící font</th><th>Chybí u</th><th>Titulků</th><th>Řádků</th></tr></thead>
           <tbody></tbody>

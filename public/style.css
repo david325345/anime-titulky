@@ -64,6 +64,12 @@ main { padding: 22px; max-width: 2200px; margin: 0 auto; }
 }
 .panel h2 { margin: 0 0 14px; font-size: 15px; color: var(--text); }
 .table-wrap { overflow-x: auto; }
+/* sbalitelné seznamy (žádosti, chybějící fonty): otevřené mají omezenou výšku se scrollem,
+   sbalené se skryjí úplně — dlouhý seznam tak nenatahuje stránku */
+.collapsible { max-height: 420px; overflow: auto; }
+.collapsible thead th { position: sticky; top: 0; background: var(--panel); z-index: 1; }
+.panel.collapsed .collapsible { display: none !important; }
+.collapse-btn { padding: 4px 10px; font-size: 13px; white-space: nowrap; }
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
 th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .4px; white-space: nowrap; }

@@ -318,6 +318,26 @@ if (addonReqTable) {
   });
 }
 
+// ── Sbalitelné seznamy (žádosti, chybějící fonty) — stav si pamatuje prohlížeč ──
+function setCollapseLabel(btn) {
+  const c = document.getElementById(btn.dataset.panel)?.classList.contains('collapsed');
+  const label = btn.dataset.label ? ` ${btn.dataset.label}` : '';
+  btn.textContent = `${c ? '▸ Zobrazit' : '▾ Skrýt'}${label}`;
+  btn.title = c ? 'Rozbalit seznam' : 'Sbalit seznam (zůstane sbalený i po obnovení stránky)';
+}
+document.querySelectorAll('.collapse-btn').forEach((btn) => {
+  const panel = document.getElementById(btn.dataset.panel);
+  if (!panel) return;
+  const key = `collapsed:${panel.id}`;
+  try { panel.classList.toggle('collapsed', localStorage.getItem(key) === '1'); } catch { /* bez úložiště */ }
+  setCollapseLabel(btn);
+  btn.addEventListener('click', () => {
+    const c = panel.classList.toggle('collapsed');
+    try { localStorage.setItem(key, c ? '1' : '0'); } catch { /* bez úložiště */ }
+    setCollapseLabel(btn);
+  });
+});
+
 function load() { loadOverview(); loadSubs(); loadRequests(); loadAddonRequests(); loadFonts(); }
 
 // ── Fonty titulků (knihovna + chybějící fonty) ───────────────────────────────
@@ -349,6 +369,12 @@ function renderFonts(d) {
   const wrap = $('#fontsMissingWrap');
   const body = $('#fontsMissingTable tbody');
   if (!wrap || !body) return;
+  const toggle = $('#fontsMissingToggle');
+  if (toggle) {
+    toggle.style.display = d.missing?.length ? '' : 'none';
+    toggle.dataset.label = `chybějící fonty (${d.missing?.length || 0})`;
+    setCollapseLabel(toggle);
+  }
   if (!d.missing || !d.missing.length) { wrap.style.display = 'none'; return; }
   wrap.style.display = '';
   // u čeho font chybí: „Anime – díl 2 · CZ · Skupina · zdroj“ (prvních 15, zbytek jen počtem)

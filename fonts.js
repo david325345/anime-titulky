@@ -30,6 +30,11 @@ export const FONT_EXT = /\.(ttf|otf|ttc|otc)$/i;
 const MAX_FULL_EMBED = 4 * 1024 * 1024;
 // jména, která se při zmenšení zachovají (rodina, řez, celé jméno, PostScript, typografická…)
 const KEEP_NAME_IDS = [0, 1, 2, 3, 4, 5, 6, 16, 17, 21, 22];
+// když zmenšení selže, zkusí se znovu bez těchto tabulek (tvarování, svislá sazba, bitmapy…)
+const RETRY_DROP_TABLES = [
+  'GSUB', 'GPOS', 'GDEF', 'BASE', 'JSTF', 'morx', 'mort', 'kerx', 'kern', 'vhea', 'vmtx', 'VORG',
+  'hdmx', 'VDMX', 'LTSH', 'EBDT', 'EBLC', 'EBSC', 'DSIG', 'PCLT',
+];
 // OpenType funkce, které se při zmenšení ponechají — výchozí sada harfbuzz (hb-subset):
 // běžné tvarování, kerning, ligatury, vertikální sazba, arabské/indické/hangul tvary.
 // Ozdobné alternativy (salt, swsh, ss01…) se nepoužívají a jen by font zbytečně zvětšily.
@@ -133,11 +138,20 @@ function faceInfo(buf, off) {
 // jeden řez z kolekce (TTC) jako samostatný font (harfbuzz bere jen řez č. 0)
 function extractFace(buf, off) {
   const t = tableDir(buf, off);
-  const tags = Object.keys(t).sort();
+  const tables = {};
+  for (const [tag, { checksum, offset, length }] of Object.entries(t)) {
+    tables[tag] = { data: buf.subarray(offset, offset + length), checksum };
+  }
+  return buildSfnt(buf.readUInt32BE(off), tables);
+}
+
+// sfnt z tabulek { tag: { data, checksum } } (seřazené podle tagu, zarovnané na 4 bajty)
+function buildSfnt(version, tables) {
+  const tags = Object.keys(tables).sort();
   const n = tags.length;
   const es = Math.floor(Math.log2(n || 1));
   const head = Buffer.alloc(12 + 16 * n);
-  head.writeUInt32BE(buf.readUInt32BE(off), 0);
+  head.writeUInt32BE(version, 0);
   head.writeUInt16BE(n, 4);
   head.writeUInt16BE(16 * 2 ** es, 6);
   head.writeUInt16BE(es, 8);
@@ -145,17 +159,68 @@ function extractFace(buf, off) {
   const parts = [head];
   let pos = head.length;
   tags.forEach((tag, i) => {
-    const { checksum, offset, length } = t[tag];
+    const { checksum, data } = tables[tag];
     const r = 12 + 16 * i;
     head.write(tag, r, 'latin1');
     head.writeUInt32BE(checksum, r + 4);
     head.writeUInt32BE(pos, r + 8);
-    head.writeUInt32BE(length, r + 12);
-    const pad = (4 - (length % 4)) % 4;
-    parts.push(buf.subarray(offset, offset + length), Buffer.alloc(pad));
-    pos += length + pad;
+    head.writeUInt32BE(data.length, r + 12);
+    const pad = (4 - (data.length % 4)) % 4;
+    parts.push(data, Buffer.alloc(pad));
+    pos += data.length + pad;
   });
   return Buffer.concat(parts);
+}
+
+function tableChecksum(b) {
+  let s = 0;
+  for (let i = 0; i < b.length; i += 4) {
+    s = (s + (((b[i] << 24) | ((b[i + 1] || 0) << 16) | ((b[i + 2] || 0) << 8) | (b[i + 3] || 0)) >>> 0)) >>> 0;
+  }
+  return s;
+}
+
+// samostatný font (ne kolekce) s jednou tabulkou vyměněnou za jinou
+function replaceTable(buf, tag, data) {
+  const t = tableDir(buf, 0);
+  const tables = {};
+  for (const [k, { checksum, offset, length }] of Object.entries(t)) {
+    tables[k] = { data: buf.subarray(offset, offset + length), checksum };
+  }
+  tables[tag] = { data, checksum: tableChecksum(data) };
+  return buildSfnt(buf.readUInt32BE(0), tables);
+}
+
+// tabulka jmen jen se jmény KEEP_NAME_IDS, ale ve všech jazycích (formát 0)
+function pruneNameTable(nb) {
+  const format = nb.readUInt16BE(0);
+  const count = nb.readUInt16BE(2);
+  const strOff = nb.readUInt16BE(4);
+  const recs = [];
+  for (let i = 0; i < count; i++) {
+    const r = 6 + 12 * i;
+    if (!KEEP_NAME_IDS.includes(nb.readUInt16BE(r + 6))) continue;
+    if (format === 1 && nb.readUInt16BE(r + 4) >= 0x8000) continue; // jazykové značky formátu 1
+    const len = nb.readUInt16BE(r + 8);
+    const o = strOff + nb.readUInt16BE(r + 10);
+    if (o + len > nb.length) continue;
+    recs.push({ hdr: nb.subarray(r, r + 6), id: nb.readUInt16BE(r + 6), str: nb.subarray(o, o + len) });
+  }
+  const head = Buffer.alloc(6 + 12 * recs.length);
+  head.writeUInt16BE(0, 0);
+  head.writeUInt16BE(recs.length, 2);
+  head.writeUInt16BE(head.length, 4);
+  let pos = 0;
+  recs.forEach((rc, i) => {
+    const r = 6 + 12 * i;
+    rc.hdr.copy(head, r);
+    head.writeUInt16BE(rc.id, r + 6);
+    head.writeUInt16BE(rc.str.length, r + 8);
+    head.writeUInt16BE(pos, r + 10);
+    pos += rc.str.length;
+  });
+  if (pos > 0xffff) throw new Error('tabulka jmen je moc velká');
+  return Buffer.concat([head, ...recs.map((rc) => rc.str)]);
 }
 
 // Načte všechny řezy ze souboru fontu (vyhodí chybu, když to není font).
@@ -445,18 +510,34 @@ async function subsetFace(face, chars, wants) {
   const raw = fs.readFileSync(path.join(lib.dir, face.file));
   const src = face.idx >= 0 ? extractFace(raw, faceOffsets(raw)[face.idx]) : raw;
   const text = [...new Set([...chars, ' '])].join('');
+  // bez hintingu (libass ho nepoužívá) — u fontů typu Calibri je to většina velikosti
+  const subset = (extra) => serial(() => subsetFont(src, text, {
+    targetFormat: 'truetype',
+    preserveNameIds: KEEP_NAME_IDS,
+    keepFeatures: KEEP_FEATURES,
+    noHinting: true,
+    ...extra,
+  }));
   let out = null;
   let err = null;
-  try {
-    // bez hintingu (libass ho nepoužívá) — u fontů typu Calibri je to většina velikosti
-    out = Buffer.from(await serial(() => subsetFont(src, text, {
-      targetFormat: 'truetype',
-      preserveNameIds: KEEP_NAME_IDS,
-      keepFeatures: KEEP_FEATURES,
-      noHinting: true,
-    })));
-  } catch (e) { err = e; }
+  try { out = Buffer.from(await subset()); } catch (e) { err = e; }
+  if (!out) {
+    // harfbuzz na některých starých fontech selže (např. Batang z Windows) — druhý pokus bez
+    // tabulek, bez kterých libass text vykreslí (OpenType tvarování, svislá sazba, bitmapy)
+    try { out = Buffer.from(await subset({ dropTables: RETRY_DROP_TABLES, noLayoutClosure: true })); } catch { /* platí první chyba */ }
+  }
   const keepsNames = (b) => { const n = namesOf(b); return [...wants].every((w) => n.has(w)); };
+  if (out && !keepsNames(out)) {
+    // harfbuzz nechá jen anglická jména — titulek ale může chtít japonské („游明朝 Demibold“),
+    // tak se do zmenšeného fontu vrátí jména z originálu ve všech jazycích
+    try {
+      const t = tableDir(src, 0);
+      if (t.name) {
+        const fixed = replaceTable(out, 'name', pruneNameTable(src.subarray(t.name.offset, t.name.offset + t.name.length)));
+        if (keepsNames(fixed)) out = fixed;
+      }
+    } catch { /* nechá se jak je */ }
+  }
   if (out && keepsNames(out)) return { data: out, full: false };
   if (src.length <= MAX_FULL_EMBED && keepsNames(src)) return { data: src, full: true };
   throw new Error(out ? 'zmenšený font ztratil jméno a celý je moc velký' : `zmenšení selhalo: ${err?.message}`);
